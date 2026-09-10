@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hidden Queen Chess</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <h1><span class="crown">♛</span> Hidden Queen Chess</h1>
+  <div class="header-controls">
+    <span id="rating-summary" class="rating-summary"></span>
+    <button id="history-btn">Match History</button>
+    <button id="new-game-btn">New Game</button>
+  </div>
+</header>
+
+<main>
+  <div class="board-column">
+    <div class="nameplates">
+      <div class="nameplate" id="nameplate-human"></div>
+      <div class="nameplate-vs">vs</div>
+      <div class="nameplate" id="nameplate-bot"></div>
+    </div>
+    <div id="status-banner">Setting up...</div>
+    <div id="rating-change-line" class="rating-change-line hidden"></div>
+    <div id="turn-indicator"></div>
+    <div class="board-row">
+      <div id="board"></div>
+    </div>
+    <div class="file-labels" id="file-labels"></div>
+  </div>
+
+  <div class="side-panel">
+    <div class="panel-box" id="premove-panel-box">
+      <h3>Premoves <span id="premove-count"></span></h3>
+      <div id="premove-list" class="premove-list"></div>
+      <button id="clear-premoves-btn" class="small-btn">Clear premoves</button>
+    </div>
+    <div class="panel-box">
+      <h3 id="tray-by-human-label">Captured by you</h3>
+      <div class="tray" id="tray-by-human"></div>
+    </div>
+    <div class="panel-box">
+      <h3 id="tray-by-bot-label">Captured by opponent</h3>
+      <div class="tray" id="tray-by-bot"></div>
+    </div>
+    <div class="panel-box">
+      <h3>Move history</h3>
+      <div id="history-list"></div>
+    </div>
+  </div>
+</main>
+
+<!-- Intro / twist explainer (shown once) -->
+<div class="modal-overlay" id="intro-modal">
+  <div class="modal-box">
+    <h2>♛ Hidden Queen Chess</h2>
+    <p>Before the game starts, you'll secretly designate one of your own pieces (not the King) as your <strong>hidden queen</strong> — it keeps its normal look but moves with full queen power for you. Your opponent does the same. Nobody's disguise is revealed until it makes a move its normal piece could never make.</p>
+    <p>Watch for the small crown marker on your own board — that's the only way <em>you'll</em> remember which piece is secretly your queen.</p>
+    <label class="modal-checkbox"><input type="checkbox" id="dont-show-again"> Don't show this again</label>
+    <div class="modal-actions">
+      <button class="primary" id="intro-continue-btn">Got it — let's play</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mode picker (shown first after New Game) -->
+<div class="modal-overlay hidden" id="mode-picker-modal">
+  <div class="modal-box">
+    <h2>How do you want to play?</h2>
+    <div class="mode-choices">
+      <button class="primary mode-choice-btn" id="mode-bot-btn">
+        <span class="mode-choice-title">Play a Bot</span>
+        <span class="mode-choice-sub">Pick an opponent by Elo, 250-3200</span>
+      </button>
+      <button class="mode-choice-btn" id="mode-hotseat-btn">
+        <span class="mode-choice-title">Play a Friend (one device)</span>
+        <span class="mode-choice-sub">Local pass-and-play, two secrets</span>
+      </button>
+      <button class="mode-choice-btn" id="mode-online-btn">
+        <span class="mode-choice-title">Play Online</span>
+        <span class="mode-choice-sub">Host or join a game from any device, anywhere</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Online sub-picker: host or join -->
+<div class="modal-overlay hidden" id="online-picker-modal">
+  <div class="modal-box">
+    <h2>Play online</h2>
+    <div class="mode-choices">
+      <button class="primary mode-choice-btn" id="online-host-btn">
+        <span class="mode-choice-title">Host a game</span>
+        <span class="mode-choice-sub">Get a room code to share with a friend</span>
+      </button>
+      <button class="mode-choice-btn" id="online-join-btn">
+        <span class="mode-choice-title">Join a game</span>
+        <span class="mode-choice-sub">Enter a friend's room code</span>
+      </button>
+    </div>
+    <div class="modal-actions">
+      <button id="online-back-btn">Back</button>
+    </div>
+  </div>
+</div>
+
+<!-- Join: room code entry -->
+<div class="modal-overlay hidden" id="join-room-modal">
+  <div class="modal-box">
+    <h2>Join a game</h2>
+    <p>Enter the room code your friend gave you.</p>
+    <input type="text" id="join-room-input" class="room-code-input" maxlength="5" placeholder="ABCDE" autocomplete="off" autocapitalize="characters">
+    <p id="join-room-error" class="room-error hidden"></p>
+    <div class="modal-actions">
+      <button id="join-room-cancel-btn">Cancel</button>
+      <button class="primary" id="join-room-submit-btn">Join</button>
+    </div>
+  </div>
+</div>
+
+<!-- Online connection status (room code display / waiting / connected) -->
+<div class="modal-overlay hidden" id="online-status-modal">
+  <div class="modal-box">
+    <h2 id="online-status-heading">Waiting for opponent</h2>
+    <div id="online-room-code-display" class="room-code-display hidden"></div>
+    <p id="online-status-message"></p>
+    <div class="modal-actions">
+      <button id="online-status-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bot picker (shown after New Game, before hidden-queen setup) -->
+<div class="modal-overlay hidden" id="bot-picker-modal">
+  <div class="modal-box wide">
+    <h2>Choose your opponent</h2>
+    <p class="rating-caption">Your practice rating: <strong id="picker-your-rating"></strong> — tracked on this device only.</p>
+    <div id="bot-roster-list" class="bot-roster-list"></div>
+  </div>
+</div>
+
+<!-- Pass-the-device interstitial (hotseat mode only) -->
+<div class="modal-overlay hidden" id="interstitial-modal">
+  <div class="modal-box">
+    <h2 id="interstitial-headline">Pass the device</h2>
+    <p id="interstitial-message"></p>
+    <p class="rating-caption">The other player should look away until you're ready.</p>
+    <div class="modal-actions">
+      <button class="primary" id="interstitial-ready-btn">I'm ready</button>
+    </div>
+  </div>
+</div>
+
+<!-- Human hidden-queen designation -->
+<div class="modal-overlay hidden" id="setup-modal">
+  <div class="modal-box">
+    <h2 id="setup-modal-heading">Choose your hidden queen</h2>
+    <p>Click one of your pieces on the board (any piece except your King) to secretly make it your queen. It will keep its normal appearance to your opponent — only you'll see a small crown marker on it.</p>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="confirm-modal">
+  <div class="modal-box" id="confirm-banner">
+    <h2>Your hidden queen:</h2>
+    <p id="confirm-piece-name" style="font-size:1.3em;"></p>
+    <div class="modal-actions">
+      <button class="primary" id="confirm-continue-btn">Begin game</button>
+    </div>
+  </div>
+</div>
+
+<!-- Promotion choice (ordinary pawns only) -->
+<div class="modal-overlay hidden" id="promo-modal">
+  <div class="modal-box">
+    <h2>Promote your pawn</h2>
+    <div class="promo-choices" id="promo-choices"></div>
+  </div>
+</div>
+
+<!-- Match history -->
+<div class="modal-overlay hidden" id="history-modal">
+  <div class="modal-box wide">
+    <h2>Match History</h2>
+    <p class="rating-caption">Practice rating — tracked on this device only.</p>
+    <div id="match-history-list" class="match-history-list"></div>
+    <div class="modal-actions" style="justify-content: space-between;">
+      <button id="reset-rating-btn">Reset my rating</button>
+      <button class="primary" id="history-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset-rating confirmation -->
+<div class="modal-overlay hidden" id="reset-confirm-modal">
+  <div class="modal-box">
+    <h2>Reset your rating?</h2>
+    <p>This permanently clears your practice rating and match history on this device. This can't be undone.</p>
+    <div class="modal-actions">
+      <button id="reset-cancel-btn">Cancel</button>
+      <button class="danger" id="reset-confirm-btn">Reset everything</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<!-- Firebase (online play only — see firebase-config.js for setup). Loaded
+     from Google's CDN; harmless to leave in even before you've configured
+     your own project — "Play Online" just shows a setup-needed message
+     until FIREBASE_CONFIG has real values. -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script src="firebase-config.js"></script>
+
+<script src="engine.js"></script>
+<script src="elo.js"></script>
+<script src="rating.js"></script>
+<script src="bot.js"></script>
+<script src="netplay.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>

@@ -1,0 +1,2677 @@
+<meta charset="utf-8">
+<title>Hidden Queen Chess</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,560;0,9..144,650;1,9..144,500&family=Work+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+/* ============ Design tokens ============ */
+:root {
+  /* Light theme (default palette) — warm aged-paper dossier */
+  --ink: #241f18;
+  --ink-dim: #6d6153;
+  --ground: #f2ead9;
+  --panel: #fbf6ea;
+  --panel-border: #ddceac;
+  --seal: #93701f;
+  --seal-strong: #6f5416;
+  --seal-soft: rgba(147, 112, 31, 0.14);
+  --board-light: #efe1bd;
+  --board-dark: #8a6239;
+  --board-frame: #4a3623;
+  --sel: rgba(58, 122, 74, 0.35);
+  --target-dot: rgba(36, 31, 24, 0.45);
+  --check-glow: rgba(168, 45, 45, 0.55);
+  --white-piece: #fffdf7;
+  --black-piece: #201a12;
+  --piece-shadow: rgba(0,0,0,0.35);
+  --danger: #a3312f;
+  --shadow-lg: 0 18px 44px rgba(60, 45, 20, 0.22);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #ece4d3;
+    --ink-dim: #a49d8c;
+    --ground: #16151a;
+    --panel: #201e24;
+    --panel-border: #3a3730;
+    --seal: #cda44a;
+    --seal-strong: #e6c069;
+    --seal-soft: rgba(205, 164, 74, 0.16);
+    --board-light: #e6d5ab;
+    --board-dark: #6f4c2d;
+    --board-frame: #2c2117;
+    --sel: rgba(94, 168, 110, 0.4);
+    --target-dot: rgba(230, 224, 208, 0.5);
+    --check-glow: rgba(214, 90, 90, 0.6);
+    --white-piece: #fdfbf5;
+    --black-piece: #14100b;
+    --piece-shadow: rgba(0,0,0,0.6);
+    --danger: #e0605c;
+    --shadow-lg: 0 18px 50px rgba(0,0,0,0.55);
+  }
+}
+:root[data-theme="dark"] {
+  --ink: #ece4d3;
+  --ink-dim: #a49d8c;
+  --ground: #16151a;
+  --panel: #201e24;
+  --panel-border: #3a3730;
+  --seal: #cda44a;
+  --seal-strong: #e6c069;
+  --seal-soft: rgba(205, 164, 74, 0.16);
+  --board-light: #e6d5ab;
+  --board-dark: #6f4c2d;
+  --board-frame: #2c2117;
+  --sel: rgba(94, 168, 110, 0.4);
+  --target-dot: rgba(230, 224, 208, 0.5);
+  --check-glow: rgba(214, 90, 90, 0.6);
+  --white-piece: #fdfbf5;
+  --black-piece: #14100b;
+  --piece-shadow: rgba(0,0,0,0.6);
+  --danger: #e0605c;
+  --shadow-lg: 0 18px 50px rgba(0,0,0,0.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: 'Work Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
+
+/* ============ Header ============ */
+header.top {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding-bottom: 18px;
+  margin-bottom: 26px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.brand-eyebrow {
+  font-family: 'Work Sans', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--seal);
+  margin: 0 0 6px 0;
+}
+h1.brand-title {
+  font-family: 'Fraunces', serif;
+  font-optical-sizing: auto;
+  font-weight: 650;
+  font-size: clamp(1.9rem, 3.2vw, 2.6rem);
+  margin: 0;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+h1.brand-title .seal-mark {
+  font-size: 0.68em;
+  color: var(--seal);
+}
+
+.header-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.field-label {
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+select, button {
+  font-family: 'Work Sans', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 500;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+select:hover, button:hover { border-color: var(--seal); }
+select:focus-visible, button:focus-visible {
+  outline: 2px solid var(--seal);
+  outline-offset: 2px;
+}
+button.primary {
+  background: var(--seal);
+  color: var(--ground);
+  border: none;
+  font-weight: 600;
+}
+:root[data-theme="dark"] button.primary, @media (prefers-color-scheme: dark) { }
+button.primary:hover { background: var(--seal-strong); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+/* ============ Layout ============ */
+main.layout {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.board-column { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 464px; max-width: 100%; }
+
+#status-banner {
+  min-height: 1.5em;
+  font-family: 'Fraunces', serif;
+  font-size: 1.05rem;
+  font-weight: 500;
+  padding: 8px 18px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  text-align: center;
+  width: 100%;
+}
+#status-banner.check { color: var(--danger); border-color: var(--danger); }
+#status-banner.over { color: var(--seal-strong); border-color: var(--seal); font-weight: 650; }
+
+#turn-indicator { font-size: 0.85rem; color: var(--ink-dim); }
+#turn-indicator strong { color: var(--ink); font-weight: 600; }
+
+.board-frame {
+  padding: 10px;
+  background: linear-gradient(155deg, var(--board-frame), color-mix(in srgb, var(--board-frame) 80%, var(--seal)));
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+#board {
+  display: grid;
+  grid-template-columns: repeat(8, 52px);
+  grid-template-rows: repeat(8, 52px);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.square {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 35px;
+  user-select: none;
+  cursor: pointer;
+}
+.square.light { background: var(--board-light); }
+.square.dark { background: var(--board-dark); }
+.square.selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--sel);
+}
+.square.target::before {
+  content: '';
+  position: absolute;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--target-dot);
+  z-index: 1;
+}
+.square.target.has-piece::before {
+  width: 100%; height: 100%;
+  border-radius: 0;
+  background: transparent;
+  border: 3px solid var(--target-dot);
+}
+.square.last-move { box-shadow: inset 0 0 0 3px var(--seal-soft), inset 0 0 0 3px color-mix(in srgb, var(--seal) 55%, transparent); }
+.square.in-check { box-shadow: inset 0 0 14px 4px var(--check-glow); }
+.square.setup-pickable { box-shadow: inset 0 0 0 3px var(--seal-soft), inset 0 0 0 2px var(--seal); }
+
+.piece { position: relative; z-index: 2; line-height: 1; }
+.piece.white { color: var(--white-piece); text-shadow: 0 1px 2px var(--piece-shadow); }
+.piece.black { color: var(--black-piece); text-shadow: 0 1px 1px rgba(255,255,255,0.15); }
+
+.crown-badge {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  font-size: 14px;
+  z-index: 3;
+  color: var(--seal-strong);
+  filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+}
+
+.file-labels { display: flex; justify-content: space-around; width: 416px; max-width: 100%; color: var(--ink-dim); font-size: 0.72rem; letter-spacing: 0.05em; }
+
+/* ============ Side panel ============ */
+.side-panel { width: 300px; max-width: 100%; display: flex; flex-direction: column; gap: 16px; }
+
+.panel-box {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.panel-box h3 {
+  margin: 0 0 10px 0;
+  font-size: 0.72rem;
+  color: var(--seal);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+}
+
+#history-list {
+  max-height: 230px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  display: grid;
+  grid-template-columns: 2.2em 1fr 1fr;
+  gap: 3px 8px;
+}
+#history-list .move-num { color: var(--ink-dim); }
+
+.tray { display: flex; flex-wrap: wrap; gap: 3px; min-height: 30px; font-size: 24px; }
+.tray .piece { font-size: 24px; }
+.tray:empty::after { content: '—'; color: var(--ink-dim); font-size: 0.85rem; font-family: 'Work Sans', sans-serif; }
+
+/* ============ Modals ============ */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(20, 16, 10, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+:root[data-theme="dark"] .modal-overlay, @media (prefers-color-scheme: dark) { }
+.hidden { display: none !important; }
+.modal-overlay.hidden { display: none; }
+#setup-modal { background: transparent; pointer-events: none; }
+#setup-modal .modal-box { pointer-events: auto; }
+
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 28px 30px;
+  max-width: 480px;
+  box-shadow: var(--shadow-lg);
+}
+.modal-box h2 {
+  font-family: 'Fraunces', serif;
+  font-weight: 600;
+  margin-top: 0;
+  font-size: 1.5rem;
+}
+.modal-box p { line-height: 1.6; color: var(--ink); }
+.modal-box p strong { color: var(--seal-strong); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.modal-checkbox { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; color: var(--ink-dim); margin-top: 12px; }
+
+.promo-choices { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
+.promo-choices button { font-size: 32px; padding: 10px 16px; line-height: 1; }
+
+/* ============ Toasts ============ */
+#toast-container {
+  position: fixed;
+  bottom: 22px; right: 22px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 200;
+  max-width: 320px;
+}
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--seal);
+  color: var(--ink);
+  padding: 12px 16px;
+  border-radius: 9px;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.88rem;
+  animation: toast-in 0.28s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.bot-thinking { color: var(--ink-dim); font-style: italic; }
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+
+/* ============ Rating / nameplates / bot ladder ============ */
+.rating-summary { font-size: 0.85rem; color: var(--ink-dim); }
+.rating-summary strong { color: var(--seal-strong); font-variant-numeric: tabular-nums; }
+
+.nameplates {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'Fraunces', serif;
+  font-size: 1rem;
+  width: 100%;
+  justify-content: center;
+}
+.nameplate {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 16px;
+  transition: border-color 0.15s ease;
+}
+.nameplate .name { font-weight: 600; }
+.nameplate .elo { color: var(--seal); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.nameplate.active-turn { border-color: var(--seal); box-shadow: 0 0 0 1px var(--seal-soft); }
+.nameplate-vs { color: var(--ink-dim); font-size: 0.8rem; font-family: 'Work Sans', sans-serif; }
+
+.rating-change-line {
+  font-size: 0.92rem;
+  padding: 6px 16px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  width: 100%;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.rating-change-line.hidden { display: none; }
+.delta-up { color: #3f8f4f; font-weight: 700; }
+.delta-down { color: var(--danger); font-weight: 700; }
+.delta-flat { color: var(--ink-dim); font-weight: 700; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .delta-up { color: #6fcf6f; } }
+:root[data-theme="dark"] .delta-up { color: #6fcf6f; }
+
+.rating-caption { font-size: 0.85rem; color: var(--ink-dim); }
+
+button.danger { border-color: var(--danger); color: var(--danger); }
+button.danger:hover { background: var(--danger); color: var(--ground); }
+
+.modal-box.wide { max-width: 640px; width: 92vw; }
+
+.bot-roster-list { max-height: 58vh; overflow-y: auto; margin-top: 12px; }
+.bot-tier-header {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--seal);
+  font-weight: 600;
+  margin: 18px 0 8px 0;
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 4px;
+}
+.bot-tier-header:first-child { margin-top: 0; }
+
+.bot-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  margin-bottom: 7px;
+  background: var(--ground);
+  font-family: 'Work Sans', sans-serif;
+}
+.bot-card:hover { border-color: var(--seal); background: var(--seal-soft); }
+.bot-card .bot-name-row { display: flex; align-items: baseline; gap: 8px; font-family: 'Fraunces', serif; }
+.bot-card .bot-name { font-weight: 650; }
+.bot-card .bot-elo { color: var(--seal); font-variant-numeric: tabular-nums; }
+.bot-card .bot-blurb { display: block; font-size: 0.83rem; color: var(--ink-dim); margin-top: 3px; }
+.bot-card .recommended-badge {
+  font-size: 0.68rem;
+  background: var(--seal);
+  color: var(--ground);
+  border-radius: 10px;
+  padding: 3px 9px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.match-history-list { max-height: 48vh; overflow-y: auto; margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.match-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 14px;
+  background: var(--ground);
+  border-radius: 8px;
+  font-size: 0.88rem;
+  gap: 10px;
+}
+.match-result-win { color: #3f8f4f; font-weight: 700; }
+.match-result-loss { color: var(--danger); font-weight: 700; }
+.match-result-draw { color: var(--ink-dim); font-weight: 700; }
+:root[data-theme="dark"] .match-result-win { color: #6fcf6f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .match-result-win { color: #6fcf6f; } }
+.match-delta { font-variant-numeric: tabular-nums; font-weight: 700; }
+.match-empty { color: var(--ink-dim); font-size: 0.9rem; text-align: center; padding: 24px; }
+
+/* ============ Premoves (section 8) ============ */
+:root { --premove: #4a7dc4; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --premove: #7ba3e0; } }
+:root[data-theme="dark"] { --premove: #7ba3e0; }
+.square.premove-highlight { box-shadow: inset 0 0 0 3px var(--premove); }
+.premove-badge {
+  position: absolute;
+  bottom: 1px; left: 3px;
+  font-size: 11px; font-weight: 700;
+  color: #fff;
+  background: var(--premove);
+  border-radius: 50%;
+  width: 15px; height: 15px;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 3;
+}
+.premove-list { display: flex; flex-direction: column; gap: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; min-height: 20px; margin-bottom: 8px; }
+.premove-empty { color: var(--ink-dim); font-family: 'Work Sans', sans-serif; }
+button.small-btn { font-size: 0.8rem; padding: 5px 10px; width: 100%; }
+
+/* ============ Mode picker (section 11: hotseat) ============ */
+.mode-choices { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.mode-choice-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 16px 18px; text-align: left; width: 100%;
+}
+.mode-choice-title { font-family: 'Fraunces', serif; font-weight: 650; font-size: 1.08rem; }
+.mode-choice-sub { font-size: 0.85rem; color: var(--ink-dim); font-weight: 400; }
+button.mode-choice-btn.primary .mode-choice-sub { color: var(--ground); opacity: 0.8; }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <div>
+    <p class="brand-eyebrow">A chess variant of concealed allegiance</p>
+    <h1 class="brand-title"><span class="seal-mark">♛</span> Hidden Queen Chess</h1>
+  </div>
+  <div class="header-controls">
+    <span id="rating-summary" class="rating-summary"></span>
+    <button id="history-btn">Match History</button>
+    <button id="new-game-btn">New Game</button>
+  </div>
+</header>
+
+<main class="layout">
+  <div class="board-column">
+    <div class="nameplates">
+      <div class="nameplate" id="nameplate-human"></div>
+      <div class="nameplate-vs">vs</div>
+      <div class="nameplate" id="nameplate-bot"></div>
+    </div>
+    <div id="status-banner">Setting up…</div>
+    <div id="rating-change-line" class="rating-change-line hidden"></div>
+    <div id="turn-indicator"></div>
+    <div class="board-frame">
+      <div id="board"></div>
+    </div>
+    <div class="file-labels" id="file-labels"></div>
+  </div>
+
+  <div class="side-panel">
+    <div class="panel-box" id="premove-panel-box">
+      <h3>Premoves <span id="premove-count"></span></h3>
+      <div id="premove-list" class="premove-list"></div>
+      <button id="clear-premoves-btn" class="small-btn">Clear premoves</button>
+    </div>
+    <div class="panel-box">
+      <h3 id="tray-by-human-label">Captured by you</h3>
+      <div class="tray" id="tray-by-human"></div>
+    </div>
+    <div class="panel-box">
+      <h3 id="tray-by-bot-label">Captured by opponent</h3>
+      <div class="tray" id="tray-by-bot"></div>
+    </div>
+    <div class="panel-box">
+      <h3>Move history</h3>
+      <div id="history-list"></div>
+    </div>
+  </div>
+</main>
+
+</div>
+
+<!-- Intro / twist explainer (shown once) -->
+<div class="modal-overlay" id="intro-modal">
+  <div class="modal-box">
+    <h2>♛ Hidden Queen Chess</h2>
+    <p>Before the game starts, you'll secretly designate one of your own pieces (not the King) as your <strong>hidden queen</strong> — it keeps its normal look but moves with full queen power for you. Your opponent does the same. Nobody's disguise is revealed until it makes a move its normal piece could never make.</p>
+    <p>Watch for the small crown marker on your own board — that's the only way <em>you'll</em> remember which piece is secretly your queen.</p>
+    <label class="modal-checkbox"><input type="checkbox" id="dont-show-again"> Don't show this again</label>
+    <div class="modal-actions">
+      <button class="primary" id="intro-continue-btn">Got it — let's play</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mode picker (shown first after New Game) -->
+<div class="modal-overlay hidden" id="mode-picker-modal">
+  <div class="modal-box">
+    <h2>How do you want to play?</h2>
+    <div class="mode-choices">
+      <button class="primary mode-choice-btn" id="mode-bot-btn">
+        <span class="mode-choice-title">Play a Bot</span>
+        <span class="mode-choice-sub">Pick an opponent by Elo, 250-3200</span>
+      </button>
+      <button class="mode-choice-btn" id="mode-hotseat-btn">
+        <span class="mode-choice-title">Play a Friend</span>
+        <span class="mode-choice-sub">Local pass-and-play, one device, two secrets</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Bot picker (shown after New Game, before hidden-queen setup) -->
+<div class="modal-overlay hidden" id="bot-picker-modal">
+  <div class="modal-box wide">
+    <h2>Choose your opponent</h2>
+    <p class="rating-caption">Your practice rating: <strong id="picker-your-rating"></strong> — tracked on this device only.</p>
+    <div id="bot-roster-list" class="bot-roster-list"></div>
+  </div>
+</div>
+
+<!-- Pass-the-device interstitial (hotseat mode only) -->
+<div class="modal-overlay hidden" id="interstitial-modal">
+  <div class="modal-box">
+    <h2 id="interstitial-headline">Pass the device</h2>
+    <p id="interstitial-message"></p>
+    <p class="rating-caption">The other player should look away until you're ready.</p>
+    <div class="modal-actions">
+      <button class="primary" id="interstitial-ready-btn">I'm ready</button>
+    </div>
+  </div>
+</div>
+
+<!-- Human hidden-queen designation -->
+<div class="modal-overlay hidden" id="setup-modal">
+  <div class="modal-box">
+    <h2 id="setup-modal-heading">Choose your hidden queen</h2>
+    <p>Click one of your pieces on the board (any piece except your King) to secretly make it your queen. It will keep its normal appearance to your opponent — only you'll see a small crown marker on it.</p>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="confirm-modal">
+  <div class="modal-box" id="confirm-banner">
+    <h2>Your hidden queen:</h2>
+    <p id="confirm-piece-name" style="font-size:1.3em;"></p>
+    <div class="modal-actions">
+      <button class="primary" id="confirm-continue-btn">Begin game</button>
+    </div>
+  </div>
+</div>
+
+<!-- Promotion choice (ordinary pawns only) -->
+<div class="modal-overlay hidden" id="promo-modal">
+  <div class="modal-box">
+    <h2>Promote your pawn</h2>
+    <div class="promo-choices" id="promo-choices"></div>
+  </div>
+</div>
+
+<!-- Match history -->
+<div class="modal-overlay hidden" id="history-modal">
+  <div class="modal-box wide">
+    <h2>Match History</h2>
+    <p class="rating-caption">Practice rating — tracked on this device only.</p>
+    <div id="match-history-list" class="match-history-list"></div>
+    <div class="modal-actions" style="justify-content: space-between;">
+      <button id="reset-rating-btn">Reset my rating</button>
+      <button class="primary" id="history-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset-rating confirmation -->
+<div class="modal-overlay hidden" id="reset-confirm-modal">
+  <div class="modal-box">
+    <h2>Reset your rating?</h2>
+    <p>This permanently clears your practice rating and match history on this device. This can't be undone.</p>
+    <div class="modal-actions">
+      <button id="reset-cancel-btn">Cancel</button>
+      <button class="danger" id="reset-confirm-btn">Reset everything</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+// ======================================================================
+// engine.js — Hidden Queen Chess rules engine (inlined for single-file
+// artifact publishing; identical to the standalone engine.js).
+// ======================================================================
+(function (root) {
+
+const WHITE = 'w';
+const BLACK = 'b';
+
+const PIECE_VALUE = { P: 100, N: 320, B: 330, R: 500, Q: 900, K: 0 };
+
+function otherColor(c) { return c === WHITE ? BLACK : WHITE; }
+
+function inBounds(r, f) { return r >= 0 && r < 8 && f >= 0 && f < 8; }
+
+function sq(r, f) { return r * 8 + f; }
+function rankOf(s) { return Math.floor(s / 8); }
+function fileOf(s) { return s % 8; }
+function algebraic(s) {
+  const f = fileOf(s), r = rankOf(s);
+  return 'abcdefgh'[f] + (r + 1);
+}
+
+const ROOK_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const BISHOP_DIRS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+const QUEEN_DIRS = ROOK_DIRS.concat(BISHOP_DIRS);
+const KNIGHT_DELTAS = [[1, 2], [2, 1], [-1, 2], [-2, 1], [1, -2], [2, -1], [-1, -2], [-2, -1]];
+const KING_DELTAS = QUEEN_DIRS;
+
+class Piece {
+  constructor(type, color, id) {
+    this.type = type;
+    this.color = color;
+    this.id = id;
+    this.isHiddenQueen = false;
+    this.disguiseType = type;
+    this.revealed = false;
+    this.hasMoved = false;
+  }
+  get displayType() {
+    if (this.isHiddenQueen && !this.revealed) return this.disguiseType;
+    return this.type;
+  }
+}
+
+class Engine {
+  constructor() {
+    this.board = new Array(64).fill(null);
+    this.turn = WHITE;
+    this.castling = { wK: true, wQ: true, bK: true, bQ: true };
+    this.epTarget = null;
+    this.halfmoveClock = 0;
+    this.fullmoveNumber = 1;
+    this.history = [];
+    this.positionCounts = new Map();
+    this._nextId = 1;
+    this.gameOver = null;
+    this.setupPhase = true;
+    this.hiddenQueenId = { w: null, b: null };
+    this._setupBoard();
+  }
+
+  _newId() { return this._nextId++; }
+
+  _setupBoard() {
+    const backRank = ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R'];
+    for (let f = 0; f < 8; f++) {
+      this.board[sq(0, f)] = new Piece(backRank[f], WHITE, this._newId());
+      this.board[sq(1, f)] = new Piece('P', WHITE, this._newId());
+      this.board[sq(6, f)] = new Piece('P', BLACK, this._newId());
+      this.board[sq(7, f)] = new Piece(backRank[f], BLACK, this._newId());
+    }
+  }
+
+  clone() {
+    const e = Object.create(Engine.prototype);
+    e.board = this.board.map(p => p ? Object.assign(new Piece(p.type, p.color, p.id), p) : null);
+    e.turn = this.turn;
+    e.castling = { ...this.castling };
+    e.epTarget = this.epTarget;
+    e.halfmoveClock = this.halfmoveClock;
+    e.fullmoveNumber = this.fullmoveNumber;
+    e.history = this.history.slice();
+    e.positionCounts = new Map(this.positionCounts);
+    e._nextId = this._nextId;
+    e.gameOver = this.gameOver;
+    e.setupPhase = this.setupPhase;
+    e.hiddenQueenId = { ...this.hiddenQueenId };
+    return e;
+  }
+
+  designateHiddenQueen(color, pieceId) {
+    const piece = this.board.find(p => p && p.id === pieceId);
+    if (!piece || piece.color !== color || piece.type === 'K') return false;
+    piece.disguiseType = piece.type;
+    piece.type = 'Q';
+    piece.isHiddenQueen = true;
+    this.hiddenQueenId[color] = pieceId;
+    return true;
+  }
+
+  pickRandomHiddenQueenFor(color) {
+    const eligible = this.board.filter(p => p && p.color === color && p.type !== 'K' && p.type !== 'Q');
+    const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+    this.designateHiddenQueen(color, chosen.id);
+    return chosen;
+  }
+
+  maybeStartGame() {
+    if (this.hiddenQueenId.w != null && this.hiddenQueenId.b != null) {
+      this.setupPhase = false;
+    }
+  }
+
+  pieceAt(s) { return this.board[s]; }
+
+  findKing(color) {
+    return this.board.findIndex(p => p && p.color === color && p.type === 'K');
+  }
+
+  pseudoMovesFor(s, board = this.board, epTarget = this.epTarget) {
+    const piece = board[s];
+    if (!piece) return [];
+    const type = piece.type;
+    const moves = [];
+    const r0 = rankOf(s), f0 = fileOf(s);
+
+    const pushSliding = (dirs) => {
+      for (const [dr, df] of dirs) {
+        let r = r0 + dr, f = f0 + df;
+        while (inBounds(r, f)) {
+          const t = sq(r, f);
+          const occ = board[t];
+          if (!occ) {
+            moves.push({ from: s, to: t, capture: false });
+          } else {
+            if (occ.color !== piece.color) moves.push({ from: s, to: t, capture: true });
+            break;
+          }
+          r += dr; f += df;
+        }
+      }
+    };
+
+    const pushSteps = (deltas) => {
+      for (const [dr, df] of deltas) {
+        const r = r0 + dr, f = f0 + df;
+        if (!inBounds(r, f)) continue;
+        const t = sq(r, f);
+        const occ = board[t];
+        if (!occ || occ.color !== piece.color) {
+          moves.push({ from: s, to: t, capture: !!occ });
+        }
+      }
+    };
+
+    if (type === 'R') pushSliding(ROOK_DIRS);
+    else if (type === 'B') pushSliding(BISHOP_DIRS);
+    else if (type === 'Q') pushSliding(QUEEN_DIRS);
+    else if (type === 'N') pushSteps(KNIGHT_DELTAS);
+    else if (type === 'K') {
+      pushSteps(KING_DELTAS);
+    } else if (type === 'P') {
+      const dir = piece.color === WHITE ? 1 : -1;
+      const startRank = piece.color === WHITE ? 1 : 6;
+      const promoRank = piece.color === WHITE ? 7 : 0;
+      const oneR = r0 + dir;
+      if (inBounds(oneR, f0) && !board[sq(oneR, f0)]) {
+        const t = sq(oneR, f0);
+        moves.push({ from: s, to: t, capture: false, promotion: rankOf(t) === promoRank, isPawnForward: true });
+        if (r0 === startRank) {
+          const twoR = r0 + 2 * dir;
+          if (!board[sq(twoR, f0)]) {
+            moves.push({ from: s, to: sq(twoR, f0), capture: false, isPawnDouble: true });
+          }
+        }
+      }
+      for (const df of [-1, 1]) {
+        const f = f0 + df, r = r0 + dir;
+        if (!inBounds(r, f)) continue;
+        const t = sq(r, f);
+        const occ = board[t];
+        if (occ && occ.color !== piece.color) {
+          moves.push({ from: s, to: t, capture: true, promotion: rankOf(t) === promoRank, isPawnCapture: true });
+        } else if (!occ && t === epTarget) {
+          moves.push({ from: s, to: t, capture: true, isEnPassant: true, isPawnCapture: true });
+        }
+      }
+    }
+    return moves;
+  }
+
+  isSquareAttacked(s, byColor, board = this.board) {
+    for (let i = 0; i < 64; i++) {
+      const p = board[i];
+      if (!p || p.color !== byColor) continue;
+      if (p.type === 'P') {
+        const dir = p.color === WHITE ? 1 : -1;
+        const r = rankOf(i) + dir;
+        for (const df of [-1, 1]) {
+          const f = fileOf(i) + df;
+          if (inBounds(r, f) && sq(r, f) === s) return true;
+        }
+        continue;
+      }
+      const moves = this.pseudoMovesFor(i, board, null);
+      if (moves.some(m => m.to === s)) return true;
+    }
+    return false;
+  }
+
+  legalMovesFrom(s, board = this.board, color = null, epTarget = this.epTarget, castlingRights = this.castling) {
+    const piece = board[s];
+    if (!piece) return [];
+    const mover = color || piece.color;
+    if (piece.color !== mover) return [];
+    let moves = this.pseudoMovesFor(s, board, epTarget);
+
+    if (piece.type === 'K') {
+      moves = moves.concat(this._castlingMoves(s, board, mover, castlingRights));
+    }
+
+    const legal = [];
+    for (const m of moves) {
+      const { board: nb } = this._applyToBoard(board, m);
+      const kingSq = nb.findIndex(p => p && p.color === mover && p.type === 'K');
+      if (!this.isSquareAttacked(kingSq, otherColor(mover), nb)) {
+        legal.push(m);
+      }
+    }
+    return legal;
+  }
+
+  _castlingMoves(kingSq, board, color, castlingRights) {
+    const moves = [];
+    const rank = color === WHITE ? 0 : 7;
+    if (kingSq !== sq(rank, 4)) return moves;
+    const opp = otherColor(color);
+    if (this.isSquareAttacked(kingSq, opp, board)) return moves;
+
+    const kingSideRight = color === WHITE ? castlingRights.wK : castlingRights.bK;
+    const queenSideRight = color === WHITE ? castlingRights.wQ : castlingRights.bQ;
+
+    if (kingSideRight) {
+      const rookSq = sq(rank, 7);
+      const rook = board[rookSq];
+      const isRookLike = rook && rook.color === color && (rook.type === 'R' || (rook.isHiddenQueen && rook.disguiseType === 'R'));
+      if (isRookLike && !rook.hasMoved) {
+        const f5 = sq(rank, 5), f6 = sq(rank, 6);
+        if (!board[f5] && !board[f6] &&
+            !this.isSquareAttacked(f5, opp, board) && !this.isSquareAttacked(f6, opp, board)) {
+          moves.push({ from: kingSq, to: f6, capture: false, isCastle: 'K', rookFrom: rookSq, rookTo: f5 });
+        }
+      }
+    }
+    if (queenSideRight) {
+      const rookSq = sq(rank, 0);
+      const rook = board[rookSq];
+      const isRookLike = rook && rook.color === color && (rook.type === 'R' || (rook.isHiddenQueen && rook.disguiseType === 'R'));
+      if (isRookLike && !rook.hasMoved) {
+        const f1 = sq(rank, 1), f2 = sq(rank, 2), f3 = sq(rank, 3);
+        if (!board[f1] && !board[f2] && !board[f3] &&
+            !this.isSquareAttacked(f2, opp, board) && !this.isSquareAttacked(f3, opp, board)) {
+          moves.push({ from: kingSq, to: f2, capture: false, isCastle: 'Q', rookFrom: rookSq, rookTo: f3 });
+        }
+      }
+    }
+    return moves;
+  }
+
+  allLegalMoves(color, board = this.board, epTarget = this.epTarget, castlingRights = this.castling) {
+    const out = [];
+    for (let s = 0; s < 64; s++) {
+      const p = board[s];
+      if (p && p.color === color) {
+        out.push(...this.legalMovesFrom(s, board, color, epTarget, castlingRights));
+      }
+    }
+    return out;
+  }
+
+  _applyToBoard(board, move) {
+    const nb = board.slice();
+    const piece = nb[move.from];
+    let capturedPiece = null;
+    if (move.isEnPassant) {
+      const capSq = sq(rankOf(move.from), fileOf(move.to));
+      capturedPiece = nb[capSq];
+      nb[capSq] = null;
+    } else if (move.capture) {
+      capturedPiece = nb[move.to];
+    }
+    nb[move.to] = piece;
+    nb[move.from] = null;
+    if (move.isCastle) {
+      const rook = nb[move.rookFrom];
+      nb[move.rookTo] = rook;
+      nb[move.rookFrom] = null;
+    }
+    return { board: nb, capturedPiece };
+  }
+
+  _moveMatchesDisguise(discType, move, color) {
+    const from = move.from, to = move.to;
+    const dr = rankOf(to) - rankOf(from);
+    const df = fileOf(to) - fileOf(from);
+    switch (discType) {
+      case 'R':
+        return (dr === 0 || df === 0) && !(dr === 0 && df === 0);
+      case 'B':
+        return Math.abs(dr) === Math.abs(df) && dr !== 0;
+      case 'N':
+        return (Math.abs(dr) === 1 && Math.abs(df) === 2) || (Math.abs(dr) === 2 && Math.abs(df) === 1);
+      case 'P': {
+        const dir = color === WHITE ? 1 : -1;
+        if (df === 0) {
+          if (move.capture) return false;
+          if (dr === dir) return true;
+          const startRank = color === WHITE ? 1 : 6;
+          if (dr === 2 * dir && rankOf(from) === startRank) return true;
+          return false;
+        } else if (Math.abs(df) === 1 && dr === dir) {
+          return !!move.capture;
+        }
+        return false;
+      }
+      case 'Q':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  wouldRevealHiddenQueen(move) {
+    const piece = this.board[move.from];
+    if (!piece || !piece.isHiddenQueen || piece.revealed) return false;
+    const legal = this.legalMovesFrom(move.from);
+    const chosen = legal.find(m => m.to === move.to);
+    if (!chosen) return false;
+    if (chosen.isCastle) return false;
+    return !this._moveMatchesDisguise(piece.disguiseType, chosen, piece.color);
+  }
+
+  makeMove(move) {
+    if (this.gameOver) return { ok: false, reason: 'game_over' };
+    const piece = this.board[move.from];
+    if (!piece || piece.color !== this.turn) return { ok: false, reason: 'no_piece' };
+
+    const legal = this.legalMovesFrom(move.from);
+    const chosen = legal.find(m => m.to === move.to);
+    if (!chosen) return { ok: false, reason: 'illegal' };
+
+    const color = piece.color;
+    const wasHidden = piece.isHiddenQueen && !piece.revealed;
+    const discType = piece.disguiseType;
+
+    let revealedNow = false;
+    if (wasHidden) {
+      const matchesDisguise = chosen.isCastle
+        ? true
+        : this._moveMatchesDisguise(discType, chosen, color);
+      if (!matchesDisguise) revealedNow = true;
+    }
+
+    let capturedPiece = null;
+    if (chosen.isEnPassant) {
+      const capSq = sq(rankOf(chosen.from), fileOf(chosen.to));
+      capturedPiece = this.board[capSq];
+      this.board[capSq] = null;
+    } else if (chosen.capture) {
+      capturedPiece = this.board[chosen.to];
+    }
+    const capturedWasHiddenQueen = !!(capturedPiece && capturedPiece.isHiddenQueen && !capturedPiece.revealed);
+    if (capturedPiece && capturedPiece.isHiddenQueen) capturedPiece.revealed = true;
+
+    this.board[chosen.to] = piece;
+    this.board[chosen.from] = null;
+    piece.hasMoved = true;
+
+    if (chosen.isCastle) {
+      const rook = this.board[chosen.rookFrom];
+      this.board[chosen.rookTo] = rook;
+      this.board[chosen.rookFrom] = null;
+      if (rook) rook.hasMoved = true;
+    }
+
+    if (chosen.promotion) {
+      const promoType = move.promotion && ['Q', 'R', 'B', 'N'].includes(move.promotion) ? move.promotion : 'Q';
+      piece.type = promoType;
+    }
+    let forcedPawnReveal = false;
+    if (wasHidden && !revealedNow && discType === 'P') {
+      const destRank = rankOf(chosen.to);
+      if (destRank === 0 || destRank === 7) forcedPawnReveal = true;
+    }
+
+    if (revealedNow || forcedPawnReveal) {
+      piece.revealed = true;
+    }
+
+    this.epTarget = chosen.isPawnDouble ? sq((rankOf(chosen.from) + rankOf(chosen.to)) / 2, fileOf(chosen.from)) : null;
+
+    if (piece.type === 'K' || chosen.isCastle) {
+      if (color === WHITE) { this.castling.wK = false; this.castling.wQ = false; }
+      else { this.castling.bK = false; this.castling.bQ = false; }
+    }
+    const clearRookRights = (s) => {
+      if (s === sq(0, 0)) this.castling.wQ = false;
+      if (s === sq(0, 7)) this.castling.wK = false;
+      if (s === sq(7, 0)) this.castling.bQ = false;
+      if (s === sq(7, 7)) this.castling.bK = false;
+    };
+    clearRookRights(chosen.from);
+    clearRookRights(chosen.to);
+
+    if (chosen.capture || piece.type === 'P' || chosen.promotion) {
+      this.halfmoveClock = 0;
+    } else {
+      this.halfmoveClock++;
+    }
+    if (color === BLACK) this.fullmoveNumber++;
+
+    const record = {
+      from: chosen.from, to: chosen.to, color,
+      pieceTrueType: piece.type,
+      pieceApparentTypeAtMoveTime: (wasHidden && !revealedNow && !forcedPawnReveal) ? discType : piece.type,
+      wasHiddenAndRevealedThisMove: revealedNow || forcedPawnReveal,
+      isHiddenQueenPiece: piece.isHiddenQueen,
+      pieceId: piece.id,
+      capture: !!chosen.capture,
+      capturedTrueType: capturedPiece ? capturedPiece.type : null,
+      capturedWasHiddenQueen,
+      isCastle: chosen.isCastle || null,
+      isEnPassant: !!chosen.isEnPassant,
+      promotion: chosen.promotion ? piece.type : null,
+      forcedPawnReveal,
+    };
+    this.history.push(record);
+
+    this.turn = otherColor(this.turn);
+
+    const posKey = this._positionKey();
+    this.positionCounts.set(posKey, (this.positionCounts.get(posKey) || 0) + 1);
+
+    this._updateGameOver();
+
+    return { ok: true, record };
+  }
+
+  _positionKey() {
+    let s = this.turn;
+    for (let i = 0; i < 64; i++) {
+      const p = this.board[i];
+      s += p ? p.color + p.type : '.';
+    }
+    s += JSON.stringify(this.castling) + '|' + this.epTarget;
+    return s;
+  }
+
+  _updateGameOver() {
+    const color = this.turn;
+    const moves = this.allLegalMoves(color);
+    const kingSq = this.findKing(color);
+    const inCheck = this.isSquareAttacked(kingSq, otherColor(color));
+    if (moves.length === 0) {
+      this.gameOver = inCheck
+        ? { result: color === WHITE ? 'black_wins' : 'white_wins', reason: 'checkmate' }
+        : { result: 'draw', reason: 'stalemate' };
+      return;
+    }
+    if (this.halfmoveClock >= 100) {
+      this.gameOver = { result: 'draw', reason: 'fifty_move' };
+      return;
+    }
+    if (this.positionCounts.get(this._positionKey()) >= 3) {
+      this.gameOver = { result: 'draw', reason: 'threefold_repetition' };
+      return;
+    }
+    if (this._insufficientMaterial()) {
+      this.gameOver = { result: 'draw', reason: 'insufficient_material' };
+      return;
+    }
+    this.gameOver = null;
+  }
+
+  _insufficientMaterial() {
+    const pieces = this.board.filter(Boolean);
+    if (pieces.some(p => ['P', 'R', 'Q'].includes(p.type))) return false;
+    const minors = pieces.filter(p => p.type === 'N' || p.type === 'B');
+    if (minors.length <= 1) return true;
+    if (minors.length === 2 && minors.every(p => p.type === 'B')) {
+      const squareColors = minors.map(p => {
+        const s = this.board.indexOf(p);
+        return (rankOf(s) + fileOf(s)) % 2;
+      });
+      if (squareColors[0] === squareColors[1] && minors[0].color !== minors[1].color) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  isInCheck(color) {
+    return this.isSquareAttacked(this.findKing(color), otherColor(color));
+  }
+
+  getPublicView(viewerColor) {
+    return this.board.map(p => {
+      if (!p) return null;
+      return {
+        type: p.displayType,
+        color: p.color,
+        id: p.id,
+        isHiddenQueen: p.isHiddenQueen && (p.revealed || p.color === viewerColor),
+        revealed: p.revealed,
+        hasMoved: p.hasMoved,
+      };
+    });
+  }
+
+  getPrivateView(color) {
+    return this.board.map(p => {
+      if (!p || p.color !== color) return null;
+      return { type: p.type, color: p.color, id: p.id, isHiddenQueen: p.isHiddenQueen, revealed: p.revealed, hasMoved: p.hasMoved };
+    });
+  }
+}
+
+const EngineExports = {
+  Engine, WHITE, BLACK, PIECE_VALUE, sq, rankOf, fileOf, algebraic, otherColor,
+};
+root.HiddenQueenEngine = EngineExports;
+
+})(window);
+</script>
+
+<script>
+// ======================================================================
+// elo.js — bot roster + getEngineConfig(elo) (inlined; identical to elo.js).
+// Kept separate from bot.js's search logic so the ladder can be
+// recalibrated without touching the search itself.
+// ======================================================================
+(function (root) {
+  const BOT_ROSTER = [
+    { id: 'rookie',      name: 'Rookie',      elo: 250,  tier: 'Beginner',     blurb: 'Barely knows where the pieces go. Hangs pieces constantly.' },
+    { id: 'scout',       name: 'Scout',       elo: 450,  tier: 'Beginner',     blurb: 'Grabs anything shiny. Rarely looks two moves ahead.' },
+    { id: 'squire',      name: 'Squire',      elo: 650,  tier: 'Beginner',     blurb: 'Learning the shapes of the pieces, still walks into forks.' },
+    { id: 'apprentice',  name: 'Apprentice',  elo: 850,  tier: 'Beginner',     blurb: 'Starting to notice threats, but only the obvious ones.' },
+    { id: 'challenger',  name: 'Challenger',  elo: 1000, tier: 'Intermediate', blurb: 'Sees one-move tactics. Deeper combinations still slip by.' },
+    { id: 'contender',   name: 'Contender',   elo: 1200, tier: 'Intermediate', blurb: 'A steadier hand — fewer one-move blunders.' },
+    { id: 'veteran',     name: 'Veteran',     elo: 1400, tier: 'Intermediate', blurb: 'Understands pawn structure in broad strokes.' },
+    { id: 'sentinel',    name: 'Sentinel',    elo: 1500, tier: 'Advanced',     blurb: 'Solid positional play, rare blunders.' },
+    { id: 'warden',      name: 'Warden',      elo: 1700, tier: 'Advanced',     blurb: 'Plans several moves ahead, punishes loose play.' },
+    { id: 'guardian',    name: 'Guardian',    elo: 1900, tier: 'Advanced',     blurb: 'Sharper tactics, decent endgame technique.' },
+    { id: 'vanguard',    name: 'Vanguard',    elo: 2100, tier: 'Advanced',     blurb: 'Very few cracks left to exploit.' },
+    { id: 'master',      name: 'Master',      elo: 2200, tier: 'Master',      blurb: 'Near-optimal tactically, strong in the endgame.' },
+    { id: 'grandmaster', name: 'Grandmaster', elo: 2350, tier: 'Master',      blurb: 'Punishes the smallest inaccuracy.' },
+    { id: 'champion',    name: 'Champion',    elo: 2450, tier: 'Master',      blurb: 'About as sharp as this engine gets while still "human-shaped."' },
+    { id: 'the-engine',  name: 'The Engine',  elo: 2800, tier: 'Engine',      blurb: 'The raw search, barely held back. A genuine challenge.' },
+    { id: 'oracle',      name: 'Oracle',      elo: 3200, tier: 'Engine',      blurb: 'No ceiling. Full depth, full time budget, no mercy.' },
+  ];
+
+  // Honesty check (spec section 6.8): a hand-rolled, clone-based (not
+  // make/unmake) JS search with a per-call transposition table and no late-
+  // move reductions realistically plays somewhere around 2200-2600 strength
+  // — NOT true 2800-3200. The top two labels are kept for the ladder's
+  // shape/range (matching chess.com's own advertised ceiling), but they are
+  // aspirational labels on this engine, not a claim of measured strength.
+  const ENGINE_CEILING_NOTE = 'A hand-rolled engine like this realistically plays around 2200-2600 strength. The 2800/3200 labels match the target ladder\'s shape, not a measured rating.';
+
+  const ANCHORS = [
+    { elo: 250,  depth: 1,  timeMs: 60,   temperature: 1.5,   blunder: 0.35,   samples: 1, layers: { pst: false, mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
+    { elo: 450,  depth: 1,  timeMs: 60,   temperature: 1.1,   blunder: 0.25,   samples: 1, layers: { pst: true,  mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
+    { elo: 650,  depth: 2,  timeMs: 60,   temperature: 0.9,   blunder: 0.18,   samples: 1, layers: { pst: true,  mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
+    { elo: 850,  depth: 2,  timeMs: 60,   temperature: 0.7,   blunder: 0.12,   samples: 1, layers: { pst: true,  mobility: true,  kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
+    { elo: 1000, depth: 2,  timeMs: 60,   temperature: 0.55,  blunder: 0.08,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: false, quiescence: false }, deception: 0.05 },
+    { elo: 1200, depth: 3,  timeMs: 60,   temperature: 0.4,   blunder: 0.05,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: false, quiescence: false }, deception: 0.15 },
+    { elo: 1400, depth: 3,  timeMs: 300,  temperature: 0.3,   blunder: 0.03,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.25 },
+    { elo: 1500, depth: 4,  timeMs: 300,  temperature: 0.25,  blunder: 0.025,  samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.35 },
+    { elo: 1700, depth: 4,  timeMs: 500,  temperature: 0.18,  blunder: 0.015,  samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.5 },
+    { elo: 1900, depth: 5,  timeMs: 600,  temperature: 0.12,  blunder: 0.01,   samples: 4, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.65 },
+    { elo: 2100, depth: 5,  timeMs: 800,  temperature: 0.08,  blunder: 0.005,  samples: 4, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.8 },
+    { elo: 2200, depth: 6,  timeMs: 1000, temperature: 0.05,  blunder: 0.003,  samples: 5, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.85 },
+    { elo: 2350, depth: 6,  timeMs: 1300, temperature: 0.03,  blunder: 0.001,  samples: 5, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.9 },
+    { elo: 2450, depth: 7,  timeMs: 1600, temperature: 0.015, blunder: 0.0005, samples: 6, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.95 },
+    { elo: 2800, depth: 8,  timeMs: 2500, temperature: 0.005, blunder: 0,      samples: 6, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 1 },
+    { elo: 3200, depth: 30, timeMs: 4000, temperature: 0,     blunder: 0,      samples: 8, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 1 },
+  ];
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function getEngineConfig(targetElo) {
+    const elo = Math.max(ANCHORS[0].elo, Math.min(ANCHORS[ANCHORS.length - 1].elo, targetElo));
+    let lo = ANCHORS[0], hi = ANCHORS[ANCHORS.length - 1];
+    for (let i = 0; i < ANCHORS.length - 1; i++) {
+      if (elo >= ANCHORS[i].elo && elo <= ANCHORS[i + 1].elo) {
+        lo = ANCHORS[i]; hi = ANCHORS[i + 1];
+        break;
+      }
+    }
+    const t = hi.elo === lo.elo ? 0 : (elo - lo.elo) / (hi.elo - lo.elo);
+    const layers = {};
+    for (const key of Object.keys(lo.layers)) {
+      layers[key] = (t >= 0.5 ? hi.layers[key] : lo.layers[key]);
+    }
+    return {
+      elo,
+      depth: Math.max(1, Math.round(lerp(lo.depth, hi.depth, t))),
+      timeMs: Math.round(lerp(lo.timeMs, hi.timeMs, t)),
+      temperature: lerp(lo.temperature, hi.temperature, t),
+      blunder: lerp(lo.blunder, hi.blunder, t),
+      layers,
+      deception: lerp(lo.deception, hi.deception, t),
+      samples: Math.max(1, Math.round(lerp(lo.samples, hi.samples, t))),
+    };
+  }
+
+  function botById(id) { return BOT_ROSTER.find(b => b.id === id) || null; }
+
+  root.HiddenQueenElo = { BOT_ROSTER, ANCHORS, getEngineConfig, botById, ENGINE_CEILING_NOTE };
+})(window);
+</script>
+
+<script>
+// ======================================================================
+// rating.js — player rating system (inlined; identical to rating.js).
+// Classic Elo with a tapered K-factor. Independent of elo.js/bot.js: this
+// is the HUMAN's own rating, tracked against the selected bot's fixed Elo.
+// ======================================================================
+(function (root) {
+  const DEFAULT_RATING = 800;
+  const STORAGE_KEY = 'hqc_rating_v1';
+  const HISTORY_KEY = 'hqc_history_v1';
+  const TAPER_GAMES = 20;
+  const K_NEW = 40;
+  const K_ESTABLISHED = 20;
+
+  function loadRating() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return { rating: DEFAULT_RATING, gamesPlayed: 0 };
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.rating !== 'number') return { rating: DEFAULT_RATING, gamesPlayed: 0 };
+      return { rating: parsed.rating, gamesPlayed: parsed.gamesPlayed || 0 };
+    } catch (e) {
+      return { rating: DEFAULT_RATING, gamesPlayed: 0 };
+    }
+  }
+
+  function saveRating(state) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveHistory(list) {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+
+  function scoreFor(result) {
+    if (result === 'win') return 1;
+    if (result === 'draw') return 0.5;
+    return 0;
+  }
+
+  function applyGameResult(playerRating, gamesPlayed, botElo, result) {
+    const K = gamesPlayed < TAPER_GAMES ? K_NEW : K_ESTABLISHED;
+    const expected = 1 / (1 + Math.pow(10, (botElo - playerRating) / 400));
+    const actual = scoreFor(result);
+    const delta = Math.round(K * (actual - expected));
+    const newRating = Math.max(100, playerRating + delta);
+    return { newRating, delta: newRating - playerRating, expected };
+  }
+
+  function recordGame({ opponentName, opponentElo, playerColor, result, endReason }) {
+    const { rating, gamesPlayed } = loadRating();
+    const { newRating, delta } = applyGameResult(rating, gamesPlayed, opponentElo, result);
+    saveRating({ rating: newRating, gamesPlayed: gamesPlayed + 1 });
+
+    const history = loadHistory();
+    history.unshift({
+      timestamp: Date.now(),
+      opponentName, opponentElo, playerColor, result, endReason,
+      ratingBefore: rating, ratingAfter: newRating, delta,
+    });
+    saveHistory(history);
+
+    return { oldRating: rating, newRating, delta };
+  }
+
+  function resetRating() {
+    saveRating({ rating: DEFAULT_RATING, gamesPlayed: 0 });
+    saveHistory([]);
+  }
+
+  root.HiddenQueenRating = { DEFAULT_RATING, loadRating, loadHistory, applyGameResult, recordGame, resetRating };
+})(window);
+</script>
+
+<script>
+// ======================================================================
+// bot.js (inlined; identical to bot.js). Section 5, REWRITTEN: the bot
+// reasons under UNCERTAINTY about which not-yet-revealed opponent piece is
+// secretly their hidden queen via determinization / Perfect-Information
+// Monte Carlo (PIMC) — it samples several concrete hypotheses, searches
+// each fully, and aggregates. Still built entirely from getPrivateView
+// (own side) / getPublicView (opponent side); never reads the human's true
+// piece-type/isHiddenQueen field.
+// ======================================================================
+(function (root) {
+  const { Engine, PIECE_VALUE, sq, rankOf, fileOf, otherColor } = root.HiddenQueenEngine;
+
+  const TIME_UP = Symbol('time_up');
+  const MATE_SCORE = 1000000;
+
+  function deriveApparentEpTarget(realEngine) {
+    const last = realEngine.history[realEngine.history.length - 1];
+    if (!last) return null;
+    const dr = rankOf(last.to) - rankOf(last.from);
+    const df = fileOf(last.to) - fileOf(last.from);
+    if (df === 0 && Math.abs(dr) === 2 && last.pieceApparentTypeAtMoveTime === 'P') {
+      return sq((rankOf(last.from) + rankOf(last.to)) / 2, fileOf(last.from));
+    }
+    return null;
+  }
+
+  // Builds one hypothetical "world": bot's own side is always true; the
+  // opponent's side is disguise-substituted EXCEPT `assumedHiddenSquare`
+  // (if given), which is granted true queen power for this hypothesis.
+  function buildWorld(realEngine, botColor, assumedHiddenSquare) {
+    const priv = realEngine.getPrivateView(botColor);
+    const pub = realEngine.getPublicView(botColor);
+    const shadow = Object.create(Engine.prototype);
+    shadow.board = new Array(64).fill(null);
+    for (let s = 0; s < 64; s++) {
+      const real = realEngine.board[s];
+      if (!real) continue;
+      if (real.color === botColor) {
+        const info = priv[s];
+        shadow.board[s] = { type: info.type, color: info.color, id: info.id, isHiddenQueen: info.isHiddenQueen, disguiseType: info.type, revealed: info.revealed, hasMoved: info.hasMoved };
+      } else {
+        const info = pub[s];
+        const isAssumedQueen = s === assumedHiddenSquare;
+        shadow.board[s] = {
+          type: isAssumedQueen ? 'Q' : info.type,
+          color: info.color, id: info.id,
+          isHiddenQueen: isAssumedQueen,
+          disguiseType: info.type,
+          revealed: info.revealed,
+          hasMoved: info.hasMoved,
+        };
+      }
+    }
+    shadow.turn = botColor;
+    shadow.castling = { ...realEngine.castling };
+    shadow.epTarget = deriveApparentEpTarget(realEngine);
+    shadow.halfmoveClock = realEngine.halfmoveClock;
+    shadow.fullmoveNumber = realEngine.fullmoveNumber;
+    shadow.history = [];
+    shadow.positionCounts = new Map();
+    shadow._nextId = realEngine._nextId;
+    shadow.gameOver = null;
+    shadow.setupPhase = false;
+    shadow.hiddenQueenId = { w: null, b: null };
+    shadow._updateGameOver();
+    return shadow;
+  }
+
+  // Which opponent pieces COULD secretly be the hidden queen: any not-yet-
+  // revealed piece whose apparent type isn't K or Q. A piece already
+  // revealed (by an impossible move OR by capture) is correctly excluded —
+  // its apparent type is already 'Q', or it's off the board.
+  function findHiddenQueenCandidates(realEngine, botColor) {
+    const oppColor = otherColor(botColor);
+    const pub = realEngine.getPublicView(botColor);
+    const out = [];
+    for (let s = 0; s < 64; s++) {
+      const info = pub[s];
+      if (info && info.color === oppColor && !info.revealed && info.type !== 'K' && info.type !== 'Q') {
+        out.push(s);
+      }
+    }
+    return out;
+  }
+
+  const PST = {
+    P: [
+      0, 0, 0, 0, 0, 0, 0, 0,
+      5, 10, 10, -20, -20, 10, 10, 5,
+      5, -5, -10, 0, 0, -10, -5, 5,
+      0, 0, 0, 20, 20, 0, 0, 0,
+      5, 5, 10, 25, 25, 10, 5, 5,
+      10, 10, 20, 30, 30, 20, 10, 10,
+      50, 50, 50, 50, 50, 50, 50, 50,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    N: [
+      -50, -40, -30, -30, -30, -30, -40, -50,
+      -40, -20, 0, 5, 5, 0, -20, -40,
+      -30, 5, 10, 15, 15, 10, 5, -30,
+      -30, 0, 15, 20, 20, 15, 0, -30,
+      -30, 5, 15, 20, 20, 15, 5, -30,
+      -30, 0, 10, 15, 15, 10, 0, -30,
+      -40, -20, 0, 0, 0, 0, -20, -40,
+      -50, -40, -30, -30, -30, -30, -40, -50,
+    ],
+    B: [
+      -20, -10, -10, -10, -10, -10, -10, -20,
+      -10, 5, 0, 0, 0, 0, 5, -10,
+      -10, 10, 10, 10, 10, 10, 10, -10,
+      -10, 0, 10, 10, 10, 10, 0, -10,
+      -10, 5, 5, 10, 10, 5, 5, -10,
+      -10, 0, 5, 10, 10, 5, 0, -10,
+      -10, 0, 0, 0, 0, 0, 0, -10,
+      -20, -10, -10, -10, -10, -10, -10, -20,
+    ],
+    R: [
+      0, 0, 0, 5, 5, 0, 0, 0,
+      -5, 0, 0, 0, 0, 0, 0, -5,
+      -5, 0, 0, 0, 0, 0, 0, -5,
+      -5, 0, 0, 0, 0, 0, 0, -5,
+      -5, 0, 0, 0, 0, 0, 0, -5,
+      -5, 0, 0, 0, 0, 0, 0, -5,
+      5, 10, 10, 10, 10, 10, 10, 5,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    Q: [
+      -20, -10, -10, -5, -5, -10, -10, -20,
+      -10, 0, 0, 0, 0, 0, 0, -10,
+      -10, 0, 5, 5, 5, 5, 0, -10,
+      -5, 0, 5, 5, 5, 5, 0, -5,
+      0, 0, 5, 5, 5, 5, 0, -5,
+      -10, 5, 5, 5, 5, 5, 0, -10,
+      -10, 0, 5, 0, 0, 0, 0, -10,
+      -20, -10, -10, -5, -5, -10, -10, -20,
+    ],
+    K: [
+      20, 30, 10, 0, 0, 10, 30, 20,
+      20, 20, 0, 0, 0, 0, 20, 20,
+      -10, -20, -20, -20, -20, -20, -20, -10,
+      -20, -30, -30, -40, -40, -30, -30, -20,
+      -30, -40, -40, -50, -50, -40, -40, -30,
+      -30, -40, -40, -50, -50, -40, -40, -30,
+      -30, -40, -40, -50, -50, -40, -40, -30,
+      -30, -40, -40, -50, -50, -40, -40, -30,
+    ],
+  };
+
+  function pst(type, color, square) {
+    const table = PST[type];
+    if (!table) return 0;
+    const rank = Math.floor(square / 8), file = square % 8;
+    const tableIndex = color === 'w' ? ((7 - rank) * 8 + file) : (rank * 8 + file);
+    return table[tableIndex];
+  }
+
+  function pseudoMobility(engine, color) {
+    let count = 0;
+    for (let s = 0; s < 64; s++) {
+      const p = engine.board[s];
+      if (p && p.color === color) count += engine.pseudoMovesFor(s).length;
+    }
+    return count;
+  }
+
+  function kingSafety(engine, color) {
+    const kingSq = engine.findKing(color);
+    if (kingSq < 0) return 0;
+    let score = 0;
+    const rank = rankOf(kingSq), file = fileOf(kingSq);
+    const backRank = color === 'w' ? 0 : 7;
+    const castled = engine.history.some(h => h.isCastle && h.color === color);
+    if (castled) score += 60;
+    else if (rank !== backRank) score -= 30;
+    const shieldRank = color === 'w' ? rank + 1 : rank - 1;
+    if (shieldRank >= 0 && shieldRank < 8) {
+      for (const df of [-1, 0, 1]) {
+        const f = file + df;
+        if (f >= 0 && f < 8) {
+          const p = engine.board[sq(shieldRank, f)];
+          if (p && p.color === color && p.type === 'P') score += 10;
+        }
+      }
+    }
+    return score;
+  }
+
+  function pawnStructure(engine, color) {
+    const filesCount = new Array(8).fill(0);
+    for (let s = 0; s < 64; s++) {
+      const p = engine.board[s];
+      if (p && p.color === color && p.type === 'P') filesCount[fileOf(s)]++;
+    }
+    let score = 0;
+    for (let f = 0; f < 8; f++) {
+      if (filesCount[f] > 1) score -= 15 * (filesCount[f] - 1);
+      if (filesCount[f] > 0) {
+        const isolated = (f === 0 || filesCount[f - 1] === 0) && (f === 7 || filesCount[f + 1] === 0);
+        if (isolated) score -= 12;
+      }
+    }
+    return score;
+  }
+
+  const DEFAULT_LAYERS = { pst: true, mobility: true, kingSafety: true, pawnStructure: true, quiescence: true };
+
+  // Score from WHITE's perspective. Material (layer 0) is always on; every
+  // other term is gated by `layers` so a weak bot's search literally does
+  // not "see" king safety/pawn structure/mobility, not just weigh it badly.
+  function evaluate(engine, layers) {
+    const L = layers || DEFAULT_LAYERS;
+    let score = 0;
+    for (let s = 0; s < 64; s++) {
+      const p = engine.board[s];
+      if (!p) continue;
+      const sign = p.color === 'w' ? 1 : -1;
+      score += sign * (PIECE_VALUE[p.type] || 0);
+      if (L.pst) score += sign * pst(p.type, p.color, s);
+    }
+    if (L.kingSafety) score += kingSafety(engine, 'w') - kingSafety(engine, 'b');
+    if (L.pawnStructure) score += pawnStructure(engine, 'w') - pawnStructure(engine, 'b');
+    if (L.mobility) score += 2 * (pseudoMobility(engine, 'w') - pseudoMobility(engine, 'b'));
+    return score;
+  }
+
+  function evaluateForSideToMove(engine, layers) {
+    const v = evaluate(engine, layers);
+    return engine.turn === 'w' ? v : -v;
+  }
+
+  function moveScore(engine, m) {
+    let s = 0;
+    if (m.capture) {
+      const victim = m.isEnPassant ? engine.board[sq(rankOf(m.from), fileOf(m.to))] : engine.board[m.to];
+      const attacker = engine.board[m.from];
+      s += 10000 + (victim ? PIECE_VALUE[victim.type] : 0) * 10 - (attacker ? PIECE_VALUE[attacker.type] : 0);
+    }
+    if (m.promotion) s += 900;
+    if (m.isCastle) s += 50;
+    return s;
+  }
+
+  function orderedMoves(engine) {
+    const moves = engine.allLegalMoves(engine.turn);
+    moves.sort((a, b) => moveScore(engine, b) - moveScore(engine, a));
+    return moves;
+  }
+
+  const TT_EXACT = 0, TT_LOWER = 1, TT_UPPER = 2;
+
+  function quiescence(engine, alpha, beta, deadline, stats, layers) {
+    stats.nodes++;
+    if (stats.nodes % 2048 === 0 && Date.now() > deadline) throw TIME_UP;
+    if (engine.gameOver) {
+      return engine.gameOver.reason === 'checkmate' ? -MATE_SCORE : 0;
+    }
+    const inCheck = engine.isInCheck(engine.turn);
+    const standPat = evaluateForSideToMove(engine, layers);
+    if (!inCheck) {
+      if (standPat >= beta) return beta;
+      if (standPat > alpha) alpha = standPat;
+    }
+    const all = orderedMoves(engine);
+    const moves = inCheck ? all : all.filter(m => m.capture);
+    if (inCheck && moves.length === 0) return -MATE_SCORE;
+    for (const m of moves) {
+      const child = engine.clone();
+      child.makeMove(m);
+      const val = -quiescence(child, -beta, -alpha, deadline, stats, layers);
+      if (val >= beta) return beta;
+      if (val > alpha) alpha = val;
+    }
+    return alpha;
+  }
+
+  // Concrete engine-strengthening techniques implemented (section 6.7):
+  // move ordering (above), a transposition table, and null-move pruning.
+  // NOT implemented, by explicit scoping decision (see elo.js#
+  // ENGINE_CEILING_NOTE): make/unmake in place of clone-per-node, and late
+  // move reductions.
+  function negamax(engine, depth, alpha, beta, deadline, stats, layers, tt, allowNull) {
+    stats.nodes++;
+    if (stats.nodes % 1024 === 0 && Date.now() > deadline) throw TIME_UP;
+    if (engine.gameOver) {
+      return engine.gameOver.reason === 'checkmate' ? -(MATE_SCORE - (30 - depth)) : 0;
+    }
+    if (depth <= 0) {
+      return layers.quiescence
+        ? quiescence(engine, alpha, beta, deadline, stats, layers)
+        : evaluateForSideToMove(engine, layers);
+    }
+
+    const alphaOrig = alpha;
+    const key = engine._positionKey();
+    const ttEntry = tt.get(key);
+    if (ttEntry && ttEntry.depth >= depth) {
+      if (ttEntry.flag === TT_EXACT) return ttEntry.score;
+      if (ttEntry.flag === TT_LOWER && ttEntry.score >= beta) return ttEntry.score;
+      if (ttEntry.flag === TT_UPPER && ttEntry.score <= alpha) return ttEntry.score;
+    }
+
+    if (allowNull && depth >= 3 && !engine.isInCheck(engine.turn)) {
+      const nonPawnPieces = engine.board.some(p => p && p.color === engine.turn && p.type !== 'P' && p.type !== 'K');
+      if (nonPawnPieces) {
+        const nullChild = engine.clone();
+        nullChild.turn = otherColor(nullChild.turn);
+        nullChild.epTarget = null;
+        nullChild.halfmoveClock++;
+        nullChild._updateGameOver();
+        const R = 2;
+        const nullScore = -negamax(nullChild, depth - 1 - R, -beta, -beta + 1, deadline, stats, layers, tt, false);
+        if (nullScore >= beta) return beta;
+      }
+    }
+
+    const moves = orderedMoves(engine);
+    let best = -Infinity;
+    for (const m of moves) {
+      const child = engine.clone();
+      child.makeMove(m);
+      const val = -negamax(child, depth - 1, -beta, -alpha, deadline, stats, layers, tt, true);
+      if (val > best) best = val;
+      if (val > alpha) alpha = val;
+      if (alpha >= beta) break;
+    }
+
+    let flag = TT_EXACT;
+    if (best <= alphaOrig) flag = TT_UPPER;
+    else if (best >= beta) flag = TT_LOWER;
+    tt.set(key, { depth, score: best, flag });
+
+    return best;
+  }
+
+  const moveKey = (m) => `${m.from}-${m.to}-${m.promotion || ''}-${m.isEnPassant ? 'ep' : ''}-${m.isCastle || ''}`;
+
+  const DECEPTION_FADE_MOVES = 15;
+  const DECEPTION_BASE_PENALTY = 40;
+  function moveNumberFade(moveNumber) {
+    return Math.max(0, Math.min(1, (DECEPTION_FADE_MOVES - moveNumber) / (DECEPTION_FADE_MOVES - 1)));
+  }
+
+  function sampleWithTemperature(moves, scoreOf, temperature) {
+    if (moves.length === 1) return moves[0];
+    if (!temperature || temperature <= 0) {
+      let best = moves[0], bestScore = scoreOf(moves[0]);
+      for (const m of moves) {
+        const s = scoreOf(m);
+        if (s > bestScore) { bestScore = s; best = m; }
+      }
+      return best;
+    }
+    const scores = moves.map(scoreOf);
+    const maxScore = Math.max(...scores);
+    const weights = scores.map(s => Math.exp((s - maxScore) / (100 * temperature)));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    for (let i = 0; i < moves.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return moves[i];
+    }
+    return moves[moves.length - 1];
+  }
+
+  // Runs iterative-deepening search on one hypothetical world, returning a
+  // Map<moveKey, score> for the bot's own root moves in that world.
+  function searchWorld(world, cfg, deadline, tt) {
+    let rootMoves = orderedMoves(world);
+    const lastScores = new Map();
+    if (rootMoves.length === 0) return lastScores;
+    const stats = { nodes: 0 };
+    try {
+      for (let depth = 1; depth <= cfg.depth; depth++) {
+        let alpha = -Infinity, beta = Infinity;
+        const depthScores = new Map();
+        for (const m of rootMoves) {
+          const child = world.clone();
+          child.makeMove(m);
+          const val = -negamax(child, depth - 1, -beta, -alpha, deadline, stats, cfg.layers, tt, true);
+          depthScores.set(moveKey(m), val);
+          if (val > alpha) alpha = val;
+        }
+        lastScores.clear();
+        for (const [k, v] of depthScores) lastScores.set(k, v);
+        rootMoves = rootMoves.slice().sort((a, b) => (lastScores.get(moveKey(b)) ?? -Infinity) - (lastScores.get(moveKey(a)) ?? -Infinity));
+        if (Date.now() > deadline) break;
+      }
+    } catch (e) {
+      if (e !== TIME_UP) throw e;
+    }
+    return lastScores;
+  }
+
+  // Picks the bot's move via determinization/PIMC (see module comment):
+  // samples cfg.samples hypotheses for which opponent piece is secretly the
+  // hidden queen (or enumerates all candidates if fewer exist), searches
+  // each hypothetical world, and averages the scores each world assigns to
+  // each of the bot's own candidate moves. Falls back through the ranked
+  // list against the REAL engine's true legality, since a belief-safe move
+  // can occasionally turn out illegal in truth (e.g. it was actually pinned
+  // along a line only the true hidden queen could attack) — exactly the
+  // "caught out by the hidden queen" moment the variant intends.
+  function chooseBotMove(realEngine, botColor, engineConfig) {
+    if (realEngine.gameOver || realEngine.turn !== botColor) return null;
+    const cfg = engineConfig;
+
+    const candidates = findHiddenQueenCandidates(realEngine, botColor);
+    let assumedSquares;
+    if (candidates.length === 0) {
+      assumedSquares = [null];
+    } else if (candidates.length <= cfg.samples) {
+      assumedSquares = candidates;
+    } else {
+      const pool = candidates.slice();
+      assumedSquares = [];
+      for (let i = 0; i < cfg.samples && pool.length > 0; i++) {
+        const idx = Math.floor(Math.random() * pool.length);
+        assumedSquares.push(pool.splice(idx, 1)[0]);
+      }
+    }
+
+    const deadline = Date.now() + cfg.timeMs;
+    const perWorldDeadline = () => Math.min(deadline, Date.now() + Math.max(50, Math.floor(cfg.timeMs / assumedSquares.length)));
+
+    const aggregate = new Map();
+    for (const assumed of assumedSquares) {
+      const world = buildWorld(realEngine, botColor, assumed);
+      const tt = new Map();
+      const worldDeadline = perWorldDeadline();
+      const scores = searchWorld(world, cfg, worldDeadline, tt);
+      const rootMoves = orderedMoves(world);
+      for (const m of rootMoves) {
+        const k = moveKey(m);
+        const s = scores.get(k);
+        if (s === undefined) continue;
+        const entry = aggregate.get(k) || { sum: 0, count: 0, move: m };
+        entry.sum += s;
+        entry.count += 1;
+        aggregate.set(k, entry);
+      }
+      if (Date.now() > deadline) break;
+    }
+
+    if (aggregate.size === 0) return null;
+
+    const deceptionWeight = (cfg.deception || 0) * moveNumberFade(realEngine.fullmoveNumber || 1);
+    const rankedMoves = Array.from(aggregate.values());
+    const adjustedScore = (entry) => {
+      const avg = entry.sum / entry.count;
+      const robustness = entry.count / assumedSquares.length;
+      let score = avg + robustness * 5;
+      if (deceptionWeight > 0 && realEngine.wouldRevealHiddenQueen(entry.move)) {
+        score -= DECEPTION_BASE_PENALTY * deceptionWeight;
+      }
+      return score;
+    };
+
+    rankedMoves.sort((a, b) => adjustedScore(b) - adjustedScore(a));
+
+    let picked = sampleWithTemperature(rankedMoves, adjustedScore, cfg.temperature);
+
+    if (cfg.blunder > 0 && Math.random() < cfg.blunder) {
+      picked = rankedMoves[Math.floor(Math.random() * rankedMoves.length)];
+    }
+
+    return confirmStillLegalInTruth(realEngine, picked, rankedMoves);
+  }
+
+  // A pass/fail GATE on an already-decided candidate: it cannot make the
+  // bot's choice better informed, only confirm whether the true board
+  // accepts it — exactly like the unavoidable moment any chess engine's
+  // chosen move meets the real board. Kept as its own named function so the
+  // no-cheat test can whitelist this one narrow, decision-blind check.
+  function confirmStillLegalInTruth(realEngine, picked, rankedMoves) {
+    const tryOrder = [picked, ...rankedMoves.filter(e => e !== picked)];
+    for (const entry of tryOrder) {
+      const real = realEngine.legalMovesFrom(entry.move.from).find(m => m.to === entry.move.to);
+      if (real) return real;
+    }
+    return null;
+  }
+
+  root.HiddenQueenBot = {
+    chooseBotMove, buildWorld, findHiddenQueenCandidates, evaluate,
+    sampleWithTemperature, moveNumberFade,
+  };
+})(window);
+</script>
+
+<script>
+// ======================================================================
+// ui.js — rendering/click handling (inlined; identical to ui.js). Every
+// draw for the human goes through engine.getPublicView(HUMAN)/the current
+// viewer. Includes section 8's premove queue and section 11's hotseat mode.
+// ======================================================================
+(function () {
+  const { Engine, sq, rankOf, fileOf, algebraic, otherColor, WHITE, BLACK } = window.HiddenQueenEngine;
+  const { chooseBotMove } = window.HiddenQueenBot;
+  const { BOT_ROSTER, getEngineConfig } = window.HiddenQueenElo;
+  const Rating = window.HiddenQueenRating;
+
+  const HUMAN = WHITE;
+  const BOT = BLACK;
+
+  const GLYPHS = {
+    w: { P: '♙', N: '♘', B: '♗', R: '♖', Q: '♕', K: '♔' },
+    b: { P: '♟', N: '♞', B: '♝', R: '♜', Q: '♛', K: '♚' },
+  };
+  const PIECE_NAMES = {
+    P: 'Pawn', N: 'Knight', B: 'Bishop', R: 'Rook', Q: 'Queen', K: 'King',
+  };
+  function friendlyName(type, file) {
+    if (type === 'R' || type === 'N' || type === 'B') {
+      const side = file < 4 ? 'Queenside' : 'Kingside';
+      return `${side} ${PIECE_NAMES[type]}`;
+    }
+    return PIECE_NAMES[type] || type;
+  }
+
+  const boardEl = document.getElementById('board');
+  const fileLabelsEl = document.getElementById('file-labels');
+  const statusBanner = document.getElementById('status-banner');
+  const turnIndicator = document.getElementById('turn-indicator');
+  const historyList = document.getElementById('history-list');
+  const trayByHuman = document.getElementById('tray-by-human');
+  const trayByBot = document.getElementById('tray-by-bot');
+  const trayByHumanLabel = document.getElementById('tray-by-human-label');
+  const trayByBotLabel = document.getElementById('tray-by-bot-label');
+  const newGameBtn = document.getElementById('new-game-btn');
+  const historyBtn = document.getElementById('history-btn');
+  const ratingSummaryEl = document.getElementById('rating-summary');
+  const ratingChangeLine = document.getElementById('rating-change-line');
+  const nameplateHuman = document.getElementById('nameplate-human');
+  const nameplateBot = document.getElementById('nameplate-bot');
+
+  const introModal = document.getElementById('intro-modal');
+  const introContinueBtn = document.getElementById('intro-continue-btn');
+  const dontShowAgainBox = document.getElementById('dont-show-again');
+
+  const modePickerModal = document.getElementById('mode-picker-modal');
+  const modeBotBtn = document.getElementById('mode-bot-btn');
+  const modeHotseatBtn = document.getElementById('mode-hotseat-btn');
+
+  const botPickerModal = document.getElementById('bot-picker-modal');
+  const botRosterListEl = document.getElementById('bot-roster-list');
+  const pickerYourRatingEl = document.getElementById('picker-your-rating');
+
+  const interstitialModal = document.getElementById('interstitial-modal');
+  const interstitialHeadline = document.getElementById('interstitial-headline');
+  const interstitialMessage = document.getElementById('interstitial-message');
+  const interstitialReadyBtn = document.getElementById('interstitial-ready-btn');
+
+  const setupModal = document.getElementById('setup-modal');
+  const setupModalHeading = document.getElementById('setup-modal-heading');
+  const confirmModal = document.getElementById('confirm-modal');
+  const confirmPieceName = document.getElementById('confirm-piece-name');
+  const confirmContinueBtn = document.getElementById('confirm-continue-btn');
+  const promoModal = document.getElementById('promo-modal');
+  const promoChoices = document.getElementById('promo-choices');
+  const toastContainer = document.getElementById('toast-container');
+
+  const historyModal = document.getElementById('history-modal');
+  const matchHistoryListEl = document.getElementById('match-history-list');
+  const historyCloseBtn = document.getElementById('history-close-btn');
+  const resetRatingBtn = document.getElementById('reset-rating-btn');
+  const resetConfirmModal = document.getElementById('reset-confirm-modal');
+  const resetCancelBtn = document.getElementById('reset-cancel-btn');
+  const resetConfirmBtn = document.getElementById('reset-confirm-btn');
+
+  const premoveListEl = document.getElementById('premove-list');
+  const premoveCountEl = document.getElementById('premove-count');
+  const clearPremovesBtn = document.getElementById('clear-premoves-btn');
+  const premovePanelBox = document.getElementById('premove-panel-box');
+
+  const MAX_PREMOVES = 3;
+
+  let engine = null;
+  let gameId = 0;
+  let stage = 'modePicker'; // 'modePicker' | 'botPicker' | 'setup' | 'interstitial' | 'playing' | 'over'
+  let mode = null; // 'bot' | 'hotseat'
+  let setupColor = null; // which color is currently designating its hidden queen (hotseat only)
+  let interstitialReadyCallback = null;
+  let selected = null;
+  let legalTargets = [];
+  let lastMoveSquares = null;
+  let pendingPromotion = null;
+  let selectedBot = null;
+  let engineConfig = null;
+  let ratingRecordedThisGame = false;
+  let premoveQueue = []; // [{from, to, promotion, intendedCapture}], see section 8 (bot mode only)
+
+  function refreshRatingSummary() {
+    const { rating, gamesPlayed } = Rating.loadRating();
+    ratingSummaryEl.innerHTML = `Your rating: <strong>${rating}</strong> <span title="Practice rating — tracked on this device only">(${gamesPlayed} games)</span>`;
+    return rating;
+  }
+
+  function renderNameplates() {
+    if (mode === 'hotseat') {
+      nameplateHuman.innerHTML = `<span class="name">White</span>`;
+      nameplateHuman.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === WHITE);
+      nameplateBot.innerHTML = `<span class="name">Black</span>`;
+      nameplateBot.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === BLACK);
+      trayByHumanLabel.textContent = 'Captured by White';
+      trayByBotLabel.textContent = 'Captured by Black';
+      return;
+    }
+    trayByHumanLabel.textContent = 'Captured by you';
+    trayByBotLabel.textContent = 'Captured by opponent';
+    const { rating } = Rating.loadRating();
+    nameplateHuman.innerHTML = `<span class="name">You</span> <span class="elo">${rating}</span>`;
+    nameplateHuman.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === HUMAN);
+    if (selectedBot) {
+      nameplateBot.innerHTML = `<span class="name">${selectedBot.name}</span> <span class="elo">${selectedBot.elo}</span>`;
+      nameplateBot.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === BOT);
+    } else {
+      nameplateBot.innerHTML = '';
+    }
+  }
+
+  // ---------- Mode picker & pass-device interstitial (section 11: hotseat) ----------
+
+  function openModePicker() {
+    stage = 'modePicker';
+    premovePanelBox.classList.remove('hidden');
+    if (introModal.classList.contains('hidden')) {
+      modePickerModal.classList.remove('hidden');
+    }
+  }
+
+  modeBotBtn.addEventListener('click', () => {
+    mode = 'bot';
+    modePickerModal.classList.add('hidden');
+    openBotPicker();
+  });
+  modeHotseatBtn.addEventListener('click', () => {
+    mode = 'hotseat';
+    modePickerModal.classList.add('hidden');
+    premovePanelBox.classList.add('hidden');
+    beginHotseatGame();
+  });
+
+  function showInterstitial(headline, message, onReady) {
+    stage = 'interstitial';
+    interstitialHeadline.textContent = headline;
+    interstitialMessage.textContent = message;
+    interstitialReadyCallback = onReady;
+    interstitialModal.classList.remove('hidden');
+  }
+
+  interstitialReadyBtn.addEventListener('click', () => {
+    interstitialModal.classList.add('hidden');
+    const cb = interstitialReadyCallback;
+    interstitialReadyCallback = null;
+    if (cb) cb();
+  });
+
+  function beginHotseatGame() {
+    gameId++;
+    engine = new Engine();
+    selectedBot = null;
+    engineConfig = null;
+    selected = null;
+    legalTargets = [];
+    lastMoveSquares = null;
+    pendingPromotion = null;
+    ratingRecordedThisGame = true;
+    premoveQueue = [];
+    historyList.innerHTML = '';
+    trayByHuman.innerHTML = '';
+    trayByBot.innerHTML = '';
+    ratingChangeLine.classList.add('hidden');
+    ratingChangeLine.textContent = '';
+    turnIndicator.textContent = '';
+    statusBanner.textContent = '';
+    statusBanner.className = '';
+    setupColor = WHITE;
+    renderNameplates();
+    showInterstitial('Pass the device', 'White: get ready to secretly choose your hidden queen.', () => enterColorSetup(WHITE));
+  }
+
+  function enterColorSetup(color) {
+    setupColor = color;
+    stage = 'setup';
+    setupModalHeading.textContent = `${color === WHITE ? 'White' : 'Black'}: choose your hidden queen`;
+    statusBanner.textContent = `${color === WHITE ? 'White' : 'Black'}: choose your hidden queen — click one of your pieces below.`;
+    statusBanner.className = '';
+    if (introModal.classList.contains('hidden')) {
+      setupModal.classList.remove('hidden');
+    }
+    render();
+  }
+
+  function currentViewerColor() {
+    if (mode !== 'hotseat') return HUMAN;
+    if (stage === 'setup') return setupColor;
+    if (!engine) return WHITE;
+    return engine.turn;
+  }
+
+  function openBotPicker() {
+    stage = 'botPicker';
+    const { rating } = Rating.loadRating();
+    pickerYourRatingEl.textContent = rating;
+    let closest = BOT_ROSTER[0], closestDiff = Infinity;
+    for (const b of BOT_ROSTER) {
+      const diff = Math.abs(b.elo - rating);
+      if (diff < closestDiff) { closestDiff = diff; closest = b; }
+    }
+    botRosterListEl.innerHTML = '';
+    let lastTier = null;
+    for (const b of BOT_ROSTER) {
+      if (b.tier !== lastTier) {
+        const h = document.createElement('div');
+        h.className = 'bot-tier-header';
+        h.textContent = b.tier;
+        botRosterListEl.appendChild(h);
+        lastTier = b.tier;
+      }
+      const card = document.createElement('button');
+      card.className = 'bot-card';
+      card.innerHTML = `
+        <span>
+          <span class="bot-name-row"><span class="bot-name">${b.name}</span> <span class="bot-elo">${b.elo}</span></span>
+          <span class="bot-blurb">${b.blurb}</span>
+        </span>
+        ${b.id === closest.id ? '<span class="recommended-badge">Recommended</span>' : ''}
+      `;
+      card.addEventListener('click', () => selectBotAndStart(b));
+      botRosterListEl.appendChild(card);
+    }
+    if (introModal.classList.contains('hidden')) {
+      botPickerModal.classList.remove('hidden');
+    }
+  }
+
+  function selectBotAndStart(bot) {
+    selectedBot = bot;
+    engineConfig = getEngineConfig(bot.elo);
+    botPickerModal.classList.add('hidden');
+    beginSetupPhase();
+  }
+
+  function beginSetupPhase() {
+    gameId++;
+    engine = new Engine();
+    stage = 'setup';
+    setupModalHeading.textContent = 'Choose your hidden queen';
+    selected = null;
+    legalTargets = [];
+    lastMoveSquares = null;
+    pendingPromotion = null;
+    ratingRecordedThisGame = false;
+    premoveQueue = [];
+    historyList.innerHTML = '';
+    trayByHuman.innerHTML = '';
+    trayByBot.innerHTML = '';
+    ratingChangeLine.classList.add('hidden');
+    ratingChangeLine.textContent = '';
+    if (introModal.classList.contains('hidden')) {
+      setupModal.classList.remove('hidden');
+    }
+    statusBanner.textContent = 'Choose your hidden queen — click one of your pieces below.';
+    statusBanner.className = '';
+    turnIndicator.textContent = '';
+    renderNameplates();
+    render();
+  }
+
+  function onSetupClick(square) {
+    const activeColor = mode === 'hotseat' ? setupColor : HUMAN;
+    const piece = engine.pieceAt(square);
+    if (!piece || piece.color !== activeColor || piece.type === 'K') return;
+    engine.designateHiddenQueen(activeColor, piece.id);
+    setupModal.classList.add('hidden');
+
+    if (mode !== 'hotseat') {
+      engine.pickRandomHiddenQueenFor(BOT);
+      engine.maybeStartGame();
+      stage = 'playing';
+    }
+
+    const f = fileOf(square);
+    confirmPieceName.textContent = friendlyName(piece.disguiseType, f);
+    confirmModal.classList.remove('hidden');
+    render();
+  }
+
+  confirmContinueBtn.addEventListener('click', () => {
+    confirmModal.classList.add('hidden');
+
+    if (mode === 'hotseat' && setupColor === WHITE) {
+      showInterstitial('Pass the device', 'Black: get ready to secretly choose your hidden queen.', () => enterColorSetup(BLACK));
+      return;
+    }
+    if (mode === 'hotseat' && setupColor === BLACK) {
+      engine.maybeStartGame();
+      stage = 'playing';
+      showInterstitial('Pass the device', 'White moves first.', () => {
+        stage = 'playing';
+        statusBanner.textContent = '';
+        updateStatusAndTurn();
+        render();
+      });
+      return;
+    }
+
+    statusBanner.textContent = '';
+    updateStatusAndTurn();
+    render();
+  });
+
+  introContinueBtn.addEventListener('click', () => {
+    if (dontShowAgainBox.checked) {
+      try { localStorage.setItem('hqc_seen_intro', '1'); } catch (e) {}
+    }
+    introModal.classList.add('hidden');
+    if (stage === 'setup') setupModal.classList.remove('hidden');
+    else if (stage === 'botPicker') botPickerModal.classList.remove('hidden');
+    else if (stage === 'modePicker') modePickerModal.classList.remove('hidden');
+    else if (stage === 'interstitial') interstitialModal.classList.remove('hidden');
+  });
+
+  if ((() => { try { return localStorage.getItem('hqc_seen_intro') === '1'; } catch (e) { return false; } })()) {
+    introModal.classList.add('hidden');
+  }
+
+  function render() {
+    renderBoard();
+    renderHistory();
+    renderTrays();
+    renderNameplates();
+    renderPremoves();
+  }
+
+  function pieceInCheckSquare() {
+    if (!engine || stage === 'setup') return -1;
+    if (engine.isInCheck(engine.turn)) return engine.findKing(engine.turn);
+    return -1;
+  }
+
+  function getFullTruthView() {
+    return engine.board.map(p => p ? { type: p.type, color: p.color, id: p.id, isHiddenQueen: p.isHiddenQueen, revealed: true, hasMoved: p.hasMoved } : null);
+  }
+
+  function renderBoard() {
+    boardEl.innerHTML = '';
+    fileLabelsEl.innerHTML = '';
+    if (!engine) return;
+    const viewer = currentViewerColor();
+    const revealAll = mode === 'hotseat' && stage === 'over';
+    const pub = revealAll ? getFullTruthView() : engine.getPublicView(viewer);
+    const checkSq = pieceInCheckSquare();
+
+    for (let r = 7; r >= 0; r--) {
+      for (let f = 0; f < 8; f++) {
+        const s = sq(r, f);
+        const div = document.createElement('div');
+        div.className = 'square ' + ((r + f) % 2 === 0 ? 'dark' : 'light');
+        if (lastMoveSquares && (s === lastMoveSquares.from || s === lastMoveSquares.to)) div.classList.add('last-move');
+        if (s === checkSq) div.classList.add('in-check');
+        if (s === selected) div.classList.add('selected');
+        const targetMove = legalTargets.find(m => m.to === s);
+        if (targetMove) {
+          div.classList.add('target');
+          if (pub[s]) div.classList.add('has-piece');
+        }
+        if (stage === 'setup') {
+          const p = engine.pieceAt(s);
+          if (p && p.color === viewer && p.type !== 'K') div.classList.add('setup-pickable');
+        }
+        const premoveIndex = premoveQueue.findIndex(pm => pm.from === s || pm.to === s);
+        if (premoveIndex !== -1) div.classList.add('premove-highlight');
+
+        const info = pub[s];
+        if (info) {
+          const glyph = document.createElement('span');
+          glyph.className = 'piece ' + (info.color === WHITE ? 'white' : 'black');
+          glyph.textContent = GLYPHS[info.color][info.type];
+          div.appendChild(glyph);
+          if (!revealAll && info.color === viewer && info.isHiddenQueen && !info.revealed) {
+            const crown = document.createElement('span');
+            crown.className = 'crown-badge';
+            crown.textContent = '♛';
+            crown.title = mode === 'hotseat' ? 'Your hidden queen (only you can see this marker)' : 'Your hidden queen';
+            div.appendChild(crown);
+          }
+        }
+        if (premoveIndex !== -1 && s === premoveQueue[premoveIndex].to) {
+          const badge = document.createElement('span');
+          badge.className = 'premove-badge';
+          badge.textContent = String(premoveIndex + 1);
+          div.appendChild(badge);
+        }
+
+        div.addEventListener('click', () => onSquareClick(s));
+        boardEl.appendChild(div);
+      }
+    }
+    for (let f = 0; f < 8; f++) {
+      const lbl = document.createElement('span');
+      lbl.textContent = 'abcdefgh'[f];
+      fileLabelsEl.appendChild(lbl);
+    }
+  }
+
+  function moveToNotation(rec) {
+    const type = rec.pieceApparentTypeAtMoveTime;
+    let s = '';
+    if (rec.isCastle === 'K') s = 'O-O';
+    else if (rec.isCastle === 'Q') s = 'O-O-O';
+    else {
+      const pieceLetter = type === 'P' ? '' : type;
+      s = pieceLetter + (rec.capture ? 'x' : '') + algebraic(rec.to);
+      if (type === 'P' && rec.capture) s = 'abcdefgh'[fileOf(rec.from)] + 'x' + algebraic(rec.to);
+      if (rec.promotion) s += '=' + rec.promotion;
+    }
+    return s;
+  }
+
+  function renderHistory() {
+    historyList.innerHTML = '';
+    if (!engine) return;
+    const hist = engine.history;
+    for (let i = 0; i < hist.length; i += 2) {
+      const num = document.createElement('span');
+      num.className = 'move-num';
+      num.textContent = (i / 2 + 1) + '.';
+      historyList.appendChild(num);
+      const white = document.createElement('span');
+      white.textContent = moveToNotation(hist[i]);
+      historyList.appendChild(white);
+      const black = document.createElement('span');
+      black.textContent = hist[i + 1] ? moveToNotation(hist[i + 1]) : '';
+      historyList.appendChild(black);
+    }
+    historyList.scrollTop = historyList.scrollHeight;
+  }
+
+  function renderTrays() {
+    trayByHuman.innerHTML = '';
+    trayByBot.innerHTML = '';
+    if (!engine) return;
+    for (const rec of engine.history) {
+      if (!rec.capture) continue;
+      const capturedColor = otherColor(rec.color);
+      const glyph = document.createElement('span');
+      glyph.className = 'piece ' + (capturedColor === WHITE ? 'white' : 'black');
+      glyph.textContent = GLYPHS[capturedColor][rec.capturedTrueType];
+      if (rec.color === HUMAN) trayByHuman.appendChild(glyph);
+      else trayByBot.appendChild(glyph);
+    }
+  }
+
+  function renderPremoves() {
+    premoveListEl.innerHTML = '';
+    premoveCountEl.textContent = premoveQueue.length > 0 ? `(${premoveQueue.length}/${MAX_PREMOVES})` : '';
+    if (premoveQueue.length === 0) {
+      premoveListEl.innerHTML = '<div class="premove-empty">None queued</div>';
+      return;
+    }
+    premoveQueue.forEach((pm, i) => {
+      const row = document.createElement('div');
+      row.textContent = `${i + 1}. ${algebraic(pm.from)}–${algebraic(pm.to)}${pm.intendedCapture ? ' (capture)' : ''}`;
+      premoveListEl.appendChild(row);
+    });
+  }
+
+  function formatDelta(delta) {
+    const cls = delta > 0 ? 'delta-up' : delta < 0 ? 'delta-down' : 'delta-flat';
+    const sign = delta > 0 ? '+' : '';
+    return `<span class="${cls}">${sign}${delta}</span>`;
+  }
+
+  function updateStatusAndTurn() {
+    if (!engine.gameOver) {
+      if (mode === 'hotseat') {
+        turnIndicator.innerHTML = `Turn: <strong>${engine.turn === WHITE ? 'White' : 'Black'}</strong>`;
+      } else {
+        turnIndicator.innerHTML = `Turn: <strong>${engine.turn === HUMAN ? 'You (White)' : (selectedBot ? selectedBot.name : 'Opponent') + ' (Black)'}</strong>`;
+      }
+      const inCheck = engine.isInCheck(engine.turn);
+      if (inCheck) {
+        if (mode === 'hotseat') {
+          statusBanner.textContent = (engine.turn === WHITE ? 'White is' : 'Black is') + ' in check!';
+        } else {
+          statusBanner.textContent = (engine.turn === HUMAN ? 'You are' : 'Opponent is') + ' in check!';
+        }
+        statusBanner.className = 'check';
+      } else {
+        statusBanner.textContent = '';
+        statusBanner.className = '';
+      }
+      renderNameplates();
+      return;
+    }
+    stage = 'over';
+    const go = engine.gameOver;
+    let msg, result;
+    if (go.reason === 'checkmate') {
+      const winner = go.result === 'white_wins' ? HUMAN : BOT;
+      if (mode === 'hotseat') {
+        msg = `Checkmate — ${winner === HUMAN ? 'White' : 'Black'} wins!`;
+      } else {
+        msg = winner === HUMAN ? 'Checkmate — you win!' : 'Checkmate — the bot wins.';
+      }
+      result = winner === HUMAN ? 'win' : 'loss';
+    } else {
+      const reasonText = {
+        stalemate: 'Stalemate', fifty_move: '50-move rule', threefold_repetition: 'Threefold repetition',
+        insufficient_material: 'Insufficient material',
+      }[go.reason] || 'Draw';
+      msg = `Draw — ${reasonText}.`;
+      result = 'draw';
+    }
+    statusBanner.textContent = msg;
+    statusBanner.className = 'over';
+    turnIndicator.textContent = 'Game over. Press New Game to play again.';
+
+    if (!ratingRecordedThisGame && selectedBot) {
+      ratingRecordedThisGame = true;
+      const { oldRating, newRating, delta } = Rating.recordGame({
+        opponentName: selectedBot.name, opponentElo: selectedBot.elo,
+        playerColor: HUMAN, result, endReason: go.reason,
+      });
+      ratingChangeLine.innerHTML = `Rating: ${oldRating} → ${newRating} (${formatDelta(delta)})`;
+      ratingChangeLine.classList.remove('hidden');
+      refreshRatingSummary();
+    }
+    renderNameplates();
+  }
+
+  function showToast(text) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = text;
+    toastContainer.appendChild(t);
+    setTimeout(() => t.remove(), 5500);
+  }
+
+  function processRevealAndCaptureToasts(rec) {
+    if (rec.wasHiddenAndRevealedThisMove && rec.color !== HUMAN) {
+      // rec.pieceApparentTypeAtMoveTime is already 'Q' for the very move
+      // that revealed it — the piece's disguiseType (never cleared on
+      // reveal) still holds what it USED to look like, which is what the
+      // flavor message needs ("their knight was revealed to be...").
+      const piece = engine.pieceAt(rec.to);
+      const discType = piece ? piece.disguiseType : rec.pieceApparentTypeAtMoveTime;
+      const name = PIECE_NAMES[discType] || discType;
+      showToast(`Your opponent's ${name.toLowerCase()} was revealed to be their hidden queen!`);
+    }
+    if (rec.capturedWasHiddenQueen) {
+      const capturedColor = otherColor(rec.color);
+      if (capturedColor !== HUMAN) {
+        showToast("That was actually their hidden queen!");
+      }
+    }
+  }
+
+  function onSquareClick(square) {
+    if (stage === 'setup') { onSetupClick(square); return; }
+    if (stage !== 'playing') return;
+    if (mode === 'hotseat') { handleMoveClick(square, engine.turn); return; }
+    if (engine.turn !== HUMAN) { onPremoveClick(square); return; }
+    handleMoveClick(square, HUMAN);
+  }
+
+  function handleMoveClick(square, forColor) {
+    if (selected === null) {
+      const piece = engine.pieceAt(square);
+      if (piece && piece.color === forColor) {
+        selected = square;
+        legalTargets = engine.legalMovesFrom(square);
+        render();
+      }
+      return;
+    }
+
+    if (square === selected) {
+      selected = null; legalTargets = [];
+      render();
+      return;
+    }
+
+    const move = legalTargets.find(m => m.to === square);
+    if (!move) {
+      const piece = engine.pieceAt(square);
+      if (piece && piece.color === forColor) {
+        selected = square;
+        legalTargets = engine.legalMovesFrom(square);
+        render();
+      } else {
+        selected = null; legalTargets = [];
+        render();
+      }
+      return;
+    }
+
+    if (move.promotion) {
+      pendingPromotion = { from: selected, to: square };
+      selected = null; legalTargets = [];
+      openPromotionModal();
+      return;
+    }
+
+    commitHumanMove({ from: move.from, to: move.to });
+  }
+
+  function openPromotionModal() {
+    promoChoices.innerHTML = '';
+    for (const t of ['Q', 'R', 'B', 'N']) {
+      const btn = document.createElement('button');
+      btn.textContent = GLYPHS[engine.turn][t];
+      btn.addEventListener('click', () => {
+        promoModal.classList.add('hidden');
+        const { from, to } = pendingPromotion;
+        pendingPromotion = null;
+        commitHumanMove({ from, to, promotion: t });
+      });
+      promoChoices.appendChild(btn);
+    }
+    promoModal.classList.remove('hidden');
+  }
+
+  // ---------- Premoves (section 8) ----------
+  // A queued move gets only a LIGHTWEIGHT sanity check now (does this piece
+  // plausibly move this way on the board as currently projected) and full
+  // re-validation against the REAL engine the instant it's actually the
+  // human's turn. If any assumption breaks — the square's occupant changed,
+  // the move is no longer legal, or a premoved CAPTURE turns out to no
+  // longer be a capture (e.g. the targeted piece was the bot's hidden queen
+  // and it moved away on its own turn) — the ENTIRE remaining queue is
+  // discarded, never silently replayed as something else.
+
+  function getProjectedBoard() {
+    const board = engine.getPublicView(HUMAN);
+    for (const pm of premoveQueue) {
+      board[pm.to] = board[pm.from];
+      board[pm.from] = null;
+    }
+    return board;
+  }
+
+  function onPremoveClick(square) {
+    if (premoveQueue.length >= MAX_PREMOVES) {
+      showToast(`Premove queue is full (max ${MAX_PREMOVES}).`);
+      return;
+    }
+    const board = getProjectedBoard();
+
+    if (selected === null) {
+      const piece = board[square];
+      if (piece && piece.color === HUMAN) {
+        selected = square;
+        legalTargets = engine.pseudoMovesFor(square, board, null);
+        render();
+      }
+      return;
+    }
+
+    if (square === selected) {
+      selected = null; legalTargets = [];
+      render();
+      return;
+    }
+
+    const target = legalTargets.find(m => m.to === square);
+    if (!target) {
+      const piece = board[square];
+      if (piece && piece.color === HUMAN) {
+        selected = square;
+        legalTargets = engine.pseudoMovesFor(square, board, null);
+        render();
+      } else {
+        selected = null; legalTargets = [];
+        render();
+      }
+      return;
+    }
+
+    premoveQueue.push({ from: selected, to: square, promotion: target.promotion ? 'Q' : undefined, intendedCapture: !!board[square] });
+    selected = null; legalTargets = [];
+    render();
+  }
+
+  clearPremovesBtn.addEventListener('click', () => {
+    premoveQueue = [];
+    render();
+  });
+
+  // Called the instant it becomes the human's real turn again. Executes
+  // the front of the queue if it still checks out, chaining through up to
+  // MAX_PREMOVES automatically as long as each one keeps holding up.
+  function processNextPremove() {
+    if (premoveQueue.length === 0 || stage !== 'playing' || engine.turn !== HUMAN) return;
+    const pm = premoveQueue.shift();
+    const legal = engine.legalMovesFrom(pm.from);
+    const chosen = legal.find(m => m.to === pm.to);
+    const brokeAssumption = !chosen || !!chosen.capture !== pm.intendedCapture || (!!chosen.promotion !== !!pm.promotion);
+    if (brokeAssumption) {
+      premoveQueue = []; // discard the WHOLE queue — never silently substitute a different move
+      showToast('A premove no longer applied as expected and was discarded.');
+      render();
+      return;
+    }
+    commitHumanMove({ from: pm.from, to: pm.to, promotion: pm.promotion });
+  }
+
+  function commitHumanMove(move) {
+    const result = engine.makeMove(move);
+    if (!result.ok) return;
+    const rec = result.record;
+    selected = null; legalTargets = [];
+    lastMoveSquares = { from: rec.from, to: rec.to };
+
+    if (mode === 'hotseat') {
+      render();
+      updateStatusAndTurn();
+      if (engine.gameOver) {
+        render();
+        return;
+      }
+      const nextColor = engine.turn;
+      showInterstitial('Pass the device', `${nextColor === WHITE ? 'White' : 'Black'} to move.`, () => {
+        stage = 'playing';
+        showHotseatRevealToasts(rec);
+        render();
+      });
+      return;
+    }
+
+    processRevealAndCaptureToasts(result.record);
+    render();
+    updateStatusAndTurn();
+    if (engine.gameOver) return;
+    scheduleBotMove();
+  }
+
+  function showHotseatRevealToasts(rec) {
+    if (rec.wasHiddenAndRevealedThisMove) {
+      const piece = engine.pieceAt(rec.to);
+      const discType = piece ? piece.disguiseType : rec.pieceApparentTypeAtMoveTime;
+      const name = PIECE_NAMES[discType] || discType;
+      showToast(`Your opponent's ${name.toLowerCase()} was revealed to be their hidden queen!`);
+    }
+    if (rec.capturedWasHiddenQueen) {
+      showToast('Your hidden queen was just captured!');
+    }
+  }
+
+  function scheduleBotMove() {
+    const myGameId = gameId;
+    const myEngine = engine;
+    turnIndicator.innerHTML = `Turn: <strong>${selectedBot ? selectedBot.name : 'Opponent'} (Black)</strong> <span class="bot-thinking">— thinking…</span>`;
+    setTimeout(() => {
+      if (myGameId !== gameId || myEngine !== engine) return;
+      const move = chooseBotMove(engine, BOT, engineConfig);
+      if (myGameId !== gameId || myEngine !== engine) return;
+      if (!move) { updateStatusAndTurn(); return; }
+      const result = engine.makeMove({ from: move.from, to: move.to, promotion: 'Q' });
+      if (result.ok) {
+        lastMoveSquares = { from: result.record.from, to: result.record.to };
+        processRevealAndCaptureToasts(result.record);
+      }
+      render();
+      updateStatusAndTurn();
+      if (!engine.gameOver) processNextPremove();
+    }, 60);
+  }
+
+  function renderMatchHistory() {
+    const history = Rating.loadHistory();
+    matchHistoryListEl.innerHTML = '';
+    if (history.length === 0) {
+      matchHistoryListEl.innerHTML = '<div class="match-empty">No games played yet.</div>';
+      return;
+    }
+    for (const g of history) {
+      const row = document.createElement('div');
+      row.className = 'match-row';
+      const resultClass = g.result === 'win' ? 'match-result-win' : g.result === 'loss' ? 'match-result-loss' : 'match-result-draw';
+      const resultLabel = g.result === 'win' ? 'Won vs' : g.result === 'loss' ? 'Lost to' : 'Drew with';
+      const date = new Date(g.timestamp);
+      row.innerHTML = `
+        <span><span class="${resultClass}">${resultLabel}</span> ${g.opponentName} (${g.opponentElo})</span>
+        <span>${date.toLocaleDateString()}</span>
+        <span class="match-delta">${formatDelta(g.delta)}</span>
+      `;
+      matchHistoryListEl.appendChild(row);
+    }
+  }
+
+  historyBtn.addEventListener('click', () => {
+    renderMatchHistory();
+    historyModal.classList.remove('hidden');
+  });
+  historyCloseBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
+
+  resetRatingBtn.addEventListener('click', () => resetConfirmModal.classList.remove('hidden'));
+  resetCancelBtn.addEventListener('click', () => resetConfirmModal.classList.add('hidden'));
+  resetConfirmBtn.addEventListener('click', () => {
+    Rating.resetRating();
+    resetConfirmModal.classList.add('hidden');
+    refreshRatingSummary();
+    renderMatchHistory();
+    renderNameplates();
+    if (stage === 'botPicker') openBotPicker();
+  });
+
+  newGameBtn.addEventListener('click', openModePicker);
+
+  refreshRatingSummary();
+  renderNameplates();
+  openModePicker();
+})();
+</script>

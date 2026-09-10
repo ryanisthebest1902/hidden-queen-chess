@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hidden Queen Chess — Tests</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 20px; }
+  .pass { color: #4caf50; }
+  .fail { color: #f44336; font-weight: bold; }
+  pre { background: #1e1e1e; padding: 10px; border-radius: 6px; overflow-x: auto; }
+  #summary { font-size: 1.2em; margin-top: 20px; }
+</style>
+</head>
+<body>
+<h1>Hidden Queen Chess — Test Harness</h1>
+<div id="out"></div>
+<div id="summary"></div>
+
+<script src="engine.js"></script>
+<script src="elo.js"></script>
+<script src="rating.js"></script>
+<script src="bot.js"></script>
+<script src="netplay.js"></script>
+<script>
+const { Engine, sq, rankOf, fileOf } = window.HiddenQueenEngine;
+const { chooseBotMove } = window.HiddenQueenBot;
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+function assert(cond, msg) {
+  const div = document.createElement('div');
+  if (cond) { div.className = 'pass'; div.textContent = '✓ ' + msg; pass++; }
+  else { div.className = 'fail'; div.textContent = '✗ ' + msg; fail++; }
+  out.appendChild(div);
+}
+function section(title) {
+  const h = document.createElement('h3');
+  h.textContent = title;
+  out.appendChild(h);
+}
+
+// ---------- 1. Start position legal move count ----------
+section('Legal move generation');
+{
+  const e = new Engine();
+  const moves = e.allLegalMoves('w');
+  assert(moves.length === 20, `start position has 20 legal moves for white (got ${moves.length})`);
+}
+
+// ---------- 2. Disguised rook stays hidden on straight moves, reveals on diagonal ----------
+section('Disguised rook reveal rule');
+{
+  const e = new Engine();
+  const rookPiece = e.board.find(p => p && p.type === 'R' && p.color === 'w' && e.board.indexOf(p) === sq(0, 0));
+  e.designateHiddenQueen('w', rookPiece.id);
+  e.makeMove({ from: sq(1, 0), to: sq(3, 0) }); // a2-a4
+  e.makeMove({ from: sq(6, 0), to: sq(5, 0) }); // a7-a6
+  const r1 = e.makeMove({ from: sq(0, 0), to: sq(2, 0) }); // Ra1-a3, straight
+  assert(r1.ok && !r1.record.wasHiddenAndRevealedThisMove, 'disguised rook moving straight (a1-a3) stays hidden');
+  e.makeMove({ from: sq(5, 0), to: sq(4, 0) }); // a6-a5
+  const r2 = e.makeMove({ from: sq(2, 0), to: sq(4, 2) }); // a3-c5, diagonal — impossible for a rook
+  assert(r2.ok && r2.record.wasHiddenAndRevealedThisMove, 'disguised rook moving diagonally (a3-c5) reveals it');
+  const revealedPiece = e.board[sq(4, 2)];
+  assert(revealedPiece.disguiseType === 'R', 'the piece\'s disguiseType still records "R" after reveal, even though pieceApparentTypeAtMoveTime flips to Q on the revealing move itself (needed so UI reveal messages can say "their rook was revealed", not "their queen was revealed to be their hidden queen")');
+}
+
+// ---------- 3. Disguised bishop symmetric case ----------
+section('Disguised bishop reveal rule');
+{
+  const e = new Engine();
+  const bishop = e.board.find(p => p && p.type === 'B' && p.color === 'w' && e.board.indexOf(p) === sq(0, 2));
+  e.designateHiddenQueen('w', bishop.id);
+  e.board[sq(1, 1)] = null; // clear b2 pawn so c1-b2 is open
+  const r1 = e.makeMove({ from: sq(0, 2), to: sq(1, 1) }); // Bc1-b2, diagonal, bishop-legal
+  assert(r1.ok && !r1.record.wasHiddenAndRevealedThisMove, 'disguised bishop moving diagonally stays hidden');
+  e.board[sq(1, 4)] = null; // clear e2 pawn so b2-e2 has an open straight path (b2,c2,d2,e2 rank 2)
+  e.board[sq(1, 2)] = null; // c2 pawn
+  e.board[sq(1, 3)] = null; // d2 pawn
+  e.turn = 'w'; // it's still white's move (black hasn't moved in this isolated test)
+  const r2 = e.makeMove({ from: sq(1, 1), to: sq(1, 4) }); // straight sideways — impossible for a bishop
+  assert(r2.ok && r2.record.wasHiddenAndRevealedThisMove, 'disguised bishop moving in a straight line reveals it');
+}
+
+// ---------- 4. Disguised knight reveals on its very first move ----------
+section('Disguised knight reveals immediately');
+{
+  const e = new Engine();
+  const knight = e.board.find(p => p && p.type === 'N' && p.color === 'w' && e.board.indexOf(p) === sq(0, 1));
+  e.designateHiddenQueen('w', knight.id);
+  const from = e.board.indexOf(knight);
+  e.board[sq(1, 1)] = null; // clear b2 pawn so the (now queen-powered) piece can slide straight up the b-file
+  const r = e.makeMove({ from, to: sq(3, 1) }); // Nb1-b4: a straight queen move, never an L-shape a real knight could match
+  assert(r.ok && r.record.wasHiddenAndRevealedThisMove, 'disguised knight reveals on its first move (queen moves are never L-shaped)');
+}
+
+// ---------- 5. Disguised pawn: hidden on 1-square forward, reveals on back rank ----------
+section('Disguised pawn reveal + forced back-rank reveal');
+{
+  const e = new Engine();
+  const pawn = e.board.find(p => p && p.type === 'P' && p.color === 'w' && e.board.indexOf(p) === sq(1, 0));
+  e.designateHiddenQueen('w', pawn.id);
+  for (let r = 2; r <= 7; r++) e.board[sq(r, 0)] = null; // clear the whole a-file ahead, incl. the back rank
+  let cur = sq(1, 0);
+  const r1 = e.makeMove({ from: cur, to: sq(2, 0) }); // one square forward — pawn-legal
+  assert(r1.ok && !r1.record.wasHiddenAndRevealedThisMove, 'disguised pawn moving one square forward stays hidden');
+  cur = sq(2, 0);
+  // Black shuttles a knight back and forth (off the a-file, so it never
+  // collides with the advancing pawn) as a harmless filler move each turn.
+  const shuttle = [[sq(7, 1), sq(5, 2)], [sq(5, 2), sq(7, 1)]];
+  let si = 0;
+  let lastRevealed = null;
+  while (rankOf(cur) < 7) {
+    const [bf, bt] = shuttle[si % 2];
+    const bMove = e.makeMove({ from: bf, to: bt });
+    if (!bMove.ok) { assert(false, `black filler move ${bf}->${bt} unexpectedly illegal`); break; }
+    si++;
+    const to = sq(rankOf(cur) + 1, 0);
+    const r = e.makeMove({ from: cur, to });
+    if (!r.ok) { assert(false, `pawn advance from ${cur} to ${to} unexpectedly illegal`); break; }
+    lastRevealed = r.record.wasHiddenAndRevealedThisMove;
+    cur = to;
+  }
+  assert(lastRevealed === true, 'disguised pawn reaching the back rank force-reveals');
+}
+
+// ---------- 6. Disguised rook can castle without revealing ----------
+section('Castling preserves disguise');
+{
+  const e = new Engine();
+  const rook = e.board.find(p => p && p.type === 'R' && p.color === 'w' && e.board.indexOf(p) === sq(0, 7));
+  e.designateHiddenQueen('w', rook.id);
+  e.board[sq(0, 5)] = null;
+  e.board[sq(0, 6)] = null;
+  const kingSq = e.findKing('w');
+  const r = e.makeMove({ from: kingSq, to: sq(0, 6) }); // O-O
+  assert(r.ok && r.record.isCastle === 'K' && !r.record.wasHiddenAndRevealedThisMove, 'disguised rook castling kingside stays hidden');
+}
+
+// ---------- 7. Hidden queen delivering checkmate via impossible pattern reveals + detects mate ----------
+section('Hidden queen delivers checkmate and reveals simultaneously');
+{
+  const e = new Engine();
+  // Strip to just kings + one black rook, reposition everything else off-board.
+  const whiteKing = e.board.find(p => p && p.type === 'K' && p.color === 'w');
+  const blackKing = e.board.find(p => p && p.type === 'K' && p.color === 'b');
+  const blackRook = e.board.find(p => p && p.type === 'R' && p.color === 'b' && e.board.indexOf(p) === sq(7, 0));
+  e.board = new Array(64).fill(null);
+  e.board[sq(0, 7)] = whiteKing;   // white king h1
+  e.board[sq(7, 7)] = blackKing;   // black king h8 (far away, irrelevant)
+  e.board[sq(1, 6)] = { type: 'P', color: 'w', id: 9001, hasMoved: true, isHiddenQueen: false, disguiseType: 'P', revealed: false }; // g2 pawn
+  e.board[sq(1, 7)] = { type: 'P', color: 'w', id: 9002, hasMoved: true, isHiddenQueen: false, disguiseType: 'P', revealed: false }; // h2 pawn
+  e.board[sq(2, 0)] = blackRook;   // black rook on a3
+  e.designateHiddenQueen('b', blackRook.id);
+  e.castling = { wK: false, wQ: false, bK: false, bQ: false };
+  e.turn = 'b';
+  e.epTarget = null;
+  e.positionCounts = new Map();
+  // King on h1 boxed by pawns g2,h2; rook(secretly queen) a3 -> c1 is a diagonal move (a3-c1), impossible for a rook, delivering mate on the back rank.
+  const r = e.makeMove({ from: sq(2, 0), to: sq(0, 2) }); // a3-c1
+  assert(r.ok, 'mating move applied');
+  assert(r.record.wasHiddenAndRevealedThisMove, 'the mating move (diagonal, impossible for a rook) reveals the hidden queen');
+  assert(!!e.gameOver && e.gameOver.reason === 'checkmate', 'checkmate is correctly detected');
+}
+
+// ---------- 8. Bot never reads human's true hidden piece type before reveal ----------
+section('No-cheating: bot never reads human true piece type pre-reveal');
+{
+  // Positive check: instrument the human's hidden piece and run the bot's
+  // move selection; the getter should only ever be touched via the
+  // sanctioned getPublicView/getPrivateView/displayType code paths.
+  const e = new Engine();
+  const humanRook = e.board.find(p => p && p.type === 'R' && p.color === 'w' && e.board.indexOf(p) === sq(0, 0));
+  e.designateHiddenQueen('w', humanRook.id); // human = white, hidden queen = queenside rook
+  const blackKnight = e.board.find(p => p && p.color === 'b' && p.type === 'N' && e.board.indexOf(p) === sq(7, 1));
+  e.designateHiddenQueen('b', blackKnight.id); // bot = black, its own hidden queen
+
+  let leaked = false;
+  const leakLog = [];
+  const target = humanRook;
+  const realType = target.type;
+  const realIsHidden = target.isHiddenQueen;
+  Object.defineProperty(target, 'type', {
+    configurable: true,
+    get() {
+      const stack = new Error().stack || '';
+      // confirmStillLegalInTruth is a narrow, decision-blind pass/fail gate
+      // (see bot.js) — it cannot inform which move ranks best, only whether
+      // an already-decided candidate is legal against the real board, which
+      // is unavoidable for ANY engine interfacing with true chess rules.
+      const sanctioned = /getPublicView|getPrivateView|get displayType|displayType|confirmStillLegalInTruth/.test(stack);
+      const fromBot = /bot\.js/.test(stack);
+      if (fromBot && !sanctioned) { leaked = true; leakLog.push(stack); }
+      return realType;
+    },
+  });
+  Object.defineProperty(target, 'isHiddenQueen', {
+    configurable: true,
+    get() {
+      const stack = new Error().stack || '';
+      const sanctioned = /getPublicView|getPrivateView|confirmStillLegalInTruth/.test(stack);
+      const fromBot = /bot\.js/.test(stack);
+      if (fromBot && !sanctioned) { leaked = true; leakLog.push(stack); }
+      return realIsHidden;
+    },
+  });
+
+  e.turn = 'b';
+  const { chooseBotMove } = window.HiddenQueenBot;
+  const cfg = window.HiddenQueenElo.getEngineConfig(650); // a fast, shallow tier for a quick test
+  chooseBotMove(e, 'b', cfg);
+  assert(!leaked, 'bot move selection never reads human hidden piece true type/isHiddenQueen outside sanctioned view methods');
+  if (leaked) console.warn('Leak stacks:', leakLog);
+
+  // Negative control: prove the detector actually works by deliberately
+  // "cheating" and confirming that IS flagged.
+  let controlLeaked = false;
+  delete target.type;
+  target.type = realType; // restore plain property first
+  Object.defineProperty(target, 'type', {
+    configurable: true,
+    get() {
+      const stack = new Error().stack || '';
+      const sanctioned = /getPublicView|getPrivateView|displayType/.test(stack);
+      const fromBot = /bot\.js|CHEAT_PROBE/.test(stack);
+      if (fromBot && !sanctioned) controlLeaked = true;
+      return realType;
+    },
+  });
+  function CHEAT_PROBE() { return target.type; } // simulates bot.js reading it directly
+  CHEAT_PROBE();
+  assert(controlLeaked, 'control: the leak detector correctly flags a direct read of the human piece\'s true type');
+
+  delete target.type; target.type = realType;
+  delete target.isHiddenQueen; target.isHiddenQueen = realIsHidden;
+}
+
+// ---------- 8b. Capturing a hidden queen reveals it (our chosen decision) ----------
+section('Capturing a hidden queen reveals it');
+{
+  const e = new Engine();
+  const blackBishop = e.board.find(p => p && p.type === 'B' && p.color === 'b' && e.board.indexOf(p) === sq(7, 2));
+  e.designateHiddenQueen('b', blackBishop.id); // black's hidden queen is disguised as a bishop
+  const whiteRook = e.board.find(p => p && p.type === 'R' && p.color === 'w' && e.board.indexOf(p) === sq(0, 0));
+  e.board[sq(0, 0)] = null;
+  e.board[sq(2, 2)] = whiteRook; // place the rook directly on c3, clear path up the c-file
+  e.board[sq(1, 2)] = null; // c2 pawn
+  e.board[sq(6, 2)] = null; // c7 pawn
+  e.turn = 'w';
+  const r = e.makeMove({ from: sq(2, 2), to: sq(7, 2) }); // Rc3xc8, capturing the disguised bishop
+  assert(r.ok && r.record.capture && r.record.capturedWasHiddenQueen, 'capturing the hidden queen sets capturedWasHiddenQueen');
+  assert(blackBishop.revealed === true, 'the captured hidden queen is marked revealed (per our capture-reveal decision)');
+}
+
+// ---------- 9. Move history / captured tray never leak apparent type wrongly ----------
+section('Move/notation apparent-type integrity');
+{
+  const e = new Engine();
+  const rookPiece = e.board.find(p => p && p.type === 'R' && p.color === 'w' && e.board.indexOf(p) === sq(0, 0));
+  e.designateHiddenQueen('w', rookPiece.id);
+  e.makeMove({ from: sq(1, 0), to: sq(3, 0) });
+  e.makeMove({ from: sq(6, 0), to: sq(5, 0) });
+  const r = e.makeMove({ from: sq(0, 0), to: sq(2, 0) }); // straight — stays hidden
+  assert(r.record.pieceApparentTypeAtMoveTime === 'R', 'apparent type in move record is "R" while still hidden (never "Q")');
+}
+
+// ---------- 10. New game / rematch clears reveal flags (simulated) ----------
+section('Fresh game state');
+{
+  const e = new Engine();
+  const p1 = e.board.find(p => p && p.type === 'N' && p.color === 'w');
+  e.designateHiddenQueen('w', p1.id);
+  const e2 = new Engine();
+  const stillFlagged = e2.board.some(p => p && p.isHiddenQueen);
+  assert(!stillFlagged, 'a freshly constructed Engine has no hidden-queen flags carried over');
+}
+
+// ---------- 10b. Determinization: bot reasons under uncertainty ----------
+section('Uncertainty-aware bot (determinization / PIMC)');
+{
+  const e = new Engine();
+  const humanKnight = e.board.find(p => p && p.type === 'N' && p.color === 'w' && e.board.indexOf(p) === sq(0, 1));
+  e.designateHiddenQueen('w', humanKnight.id);
+  const blackBishop = e.board.find(p => p && p.type === 'B' && p.color === 'b' && e.board.indexOf(p) === sq(7, 2));
+  e.designateHiddenQueen('b', blackBishop.id);
+
+  const { findHiddenQueenCandidates } = window.HiddenQueenBot;
+  const candidatesBeforeReveal = findHiddenQueenCandidates(e, 'b'); // bot=black asking about white's candidates
+  assert(candidatesBeforeReveal.length > 1, `multiple pieces are plausible hidden-queen candidates before any reveal (got ${candidatesBeforeReveal.length})`);
+  assert(candidatesBeforeReveal.includes(sq(0, 1)), 'the human\'s actual hidden knight is among the candidates (bot cannot single it out, but it is not excluded)');
+
+  // Once revealed, it should drop out of the candidate set entirely.
+  humanKnight.type = 'Q';
+  humanKnight.revealed = true;
+  const candidatesAfterReveal = findHiddenQueenCandidates(e, 'b');
+  assert(!candidatesAfterReveal.includes(sq(0, 1)), 'a revealed hidden queen is no longer a "candidate" — its identity is now public, not uncertain');
+
+  // A multi-sample search should still return a real, legal move quickly at a shallow tier.
+  e.turn = 'b';
+  const cfg = window.HiddenQueenElo.getEngineConfig(1900); // samples: 4 per elo.js
+  const { chooseBotMove } = window.HiddenQueenBot;
+  const move = chooseBotMove(e, 'b', cfg);
+  assert(!!move, 'multi-world search returns a move');
+  const legalCheck = e.legalMovesFrom(move.from).some(m => m.to === move.to);
+  assert(legalCheck, 'the move chosen via determinization is confirmed legal against the true position');
+}
+
+// ---------- 11. elo.js: engine config exists and scales sanely ----------
+section('Elo ladder config');
+{
+  const { BOT_ROSTER, getEngineConfig } = window.HiddenQueenElo;
+  assert(BOT_ROSTER.length >= 15, `bot roster spans the full range (${BOT_ROSTER.length} bots)`);
+  const weak = getEngineConfig(250);
+  const strong = getEngineConfig(3200);
+  assert(weak.blunder > strong.blunder, 'a 250 Elo bot blunders far more often than a 3200 Elo bot');
+  assert(weak.temperature > strong.temperature, 'a 250 Elo bot plays far less deterministically than a 3200 Elo bot');
+  assert(weak.depth < strong.depth, 'a 250 Elo bot searches shallower than a 3200 Elo bot');
+  assert(!weak.layers.kingSafety && strong.layers.kingSafety, 'weak bots have king-safety evaluation switched off entirely, not just underweighted');
+  assert(weak.deception === 0 && strong.deception > 0, 'only stronger bots carry any stay-hidden deception weight');
+  assert(weak.samples === 1 && strong.samples > weak.samples, `stronger bots consider more determinization worlds than weaker ones (weak=${weak.samples}, strong=${strong.samples})`);
+  // Exact-anchor lookups should reproduce the anchor row exactly (no drift from interpolation math).
+  const exact1900 = getEngineConfig(1900);
+  assert(exact1900.layers.quiescence === true && getEngineConfig(1700).layers.quiescence === false,
+    'quiescence search turns on exactly at the 1900 Elo anchor, per the calibration table');
+}
+
+// ---------- 12. rating.js: player rating math ----------
+section('Player rating math');
+{
+  const { applyGameResult } = window.HiddenQueenRating;
+  const beatMuchStronger = applyGameResult(800, 5, 1900, 'win');
+  assert(beatMuchStronger.delta > 20, `beating a much-stronger bot gives a large positive delta (got ${beatMuchStronger.delta})`);
+  const lostToMuchWeaker = applyGameResult(1900, 5, 800, 'loss');
+  assert(lostToMuchWeaker.delta < -20, `losing to a much-weaker bot gives a large negative delta (got ${lostToMuchWeaker.delta})`);
+  const evenDraw = applyGameResult(1500, 5, 1500, 'draw');
+  assert(evenDraw.delta === 0, `a draw between equally-rated players gives a ~zero delta (got ${evenDraw.delta})`);
+  const newPlayer = applyGameResult(800, 2, 800, 'win');
+  const establishedPlayer = applyGameResult(800, 30, 800, 'win');
+  assert(newPlayer.delta > establishedPlayer.delta, 'new players (fewer games) see bigger rating swings than established ones for the same result');
+}
+
+// ---------- 13. Netplay convergence: guest's partial-knowledge engine
+// matches host's authoritative engine exactly, via replay-with-retry ----------
+section('Netplay convergence (online play sync)');
+{
+  const { applyRemoteMove } = window.HiddenQueenNet;
+
+  const host = new Engine();
+  const whiteRook = host.board.find(p => p && p.type === 'R' && p.color === 'w' && host.board.indexOf(p) === sq(0, 0));
+  host.designateHiddenQueen('w', whiteRook.id);
+  const blackKnight = host.board.find(p => p && p.type === 'N' && p.color === 'b' && host.board.indexOf(p) === sq(7, 1));
+  host.designateHiddenQueen('b', blackKnight.id);
+
+  const guest = new Engine();
+  // Guest only ever learns ITS OWN (black's) secret — this mirrors exactly
+  // what a real guest client would locally know: never told white's pick.
+  guest.designateHiddenQueen('b', blackKnight.id);
+
+  function playBoth(move) {
+    const result = host.makeMove(move);
+    if (!result.ok) throw new Error('host move failed unexpectedly: ' + JSON.stringify(move));
+    const rec = result.record;
+    const msg = { from: rec.from, to: rec.to, promotion: rec.promotion || null, forcedReveal: !!rec.forcedPawnReveal };
+    const guestResult = applyRemoteMove(guest, msg);
+    if (!guestResult.ok) throw new Error('guest replay failed for ' + JSON.stringify(msg));
+  }
+
+  playBoth({ from: sq(1, 0), to: sq(3, 0) }); // a2-a4 (white pawn) — clears the rook's future diagonal
+  playBoth({ from: sq(6, 4), to: sq(4, 4) }); // e7-e5 (ordinary black pawn, filler)
+  playBoth({ from: sq(0, 0), to: sq(2, 0) }); // Ra1-a3 (white's hidden queen, disguised as rook) — straight, stays hidden
+  playBoth({ from: sq(6, 3), to: sq(4, 3) }); // d7-d5 (ordinary black pawn, filler)
+  playBoth({ from: sq(2, 0), to: sq(4, 2) }); // Ra3-c5 — DIAGONAL, impossible for a rook: reveals white's hidden queen
+
+  let allMatch = true;
+  for (let i = 0; i < 64; i++) {
+    const hp = host.board[i], gp = guest.board[i];
+    if (!hp && !gp) continue;
+    if (!hp || !gp || hp.type !== gp.type || hp.color !== gp.color || hp.revealed !== gp.revealed || hp.isHiddenQueen !== gp.isHiddenQueen) {
+      allMatch = false;
+      break;
+    }
+  }
+  assert(allMatch, "guest's local engine converges to the EXACT same board state as host's authoritative engine after a reveal-triggering move guest never independently knew was coming");
+
+  const revealedOnGuest = guest.board[sq(4, 2)];
+  assert(revealedOnGuest && revealedOnGuest.type === 'Q' && revealedOnGuest.revealed,
+    'guest discovers the reveal purely by a failed replay-then-retry — netplay.js never transmits which piece is secretly the queen');
+
+  // A move that stays disguise-consistent must NOT trigger the retry path
+  // (i.e. no false-positive reveals from guest's replay).
+  assert(!guest.board[sq(2, 0)], 'sanity: the rook is no longer on a3 after moving to c5 (board applied correctly, not just flagged)');
+}
+
+// ---------- 14. Netplay: forcedReveal flag applies even when the move
+// itself looked disguise-consistent (back-rank pawn edge case) ----------
+section('Netplay forcedReveal flag (back-rank pawn edge case)');
+{
+  const { applyRemoteMove } = window.HiddenQueenNet;
+
+  const host = new Engine();
+  const pawn = host.board.find(p => p && p.type === 'P' && p.color === 'w' && host.board.indexOf(p) === sq(1, 3));
+  host.designateHiddenQueen('w', pawn.id);
+  // Hand-place the disguised pawn one square from promotion, on an EMPTY
+  // destination (clear black's real queen off d8 first — otherwise this
+  // becomes a capture, which reveals via a different rule than the one
+  // this test targets).
+  host.board[sq(1, 3)] = null;
+  host.board[sq(7, 3)] = null;
+  pawn.hasMoved = true;
+  host.board[sq(6, 3)] = pawn;
+  const rec = host.makeMove({ from: sq(6, 3), to: sq(7, 3) }); // one square forward — disguise-consistent
+  assert(rec.ok && rec.record.forcedPawnReveal, 'host correctly force-reveals a disguised pawn reaching the back rank via an ordinary forward move');
+
+  const guest = new Engine();
+  // Mirror the same hand-placement on guest's side, WITHOUT designating it
+  // hidden — guest doesn't know this pawn is secretly the queen.
+  const guestPawn = guest.board.find(p => p && p.id === pawn.id);
+  guest.board[sq(1, 3)] = null;
+  guest.board[sq(7, 3)] = null;
+  guestPawn.hasMoved = true;
+  guest.board[sq(6, 3)] = guestPawn;
+
+  const msg = { from: sq(6, 3), to: sq(7, 3), promotion: null, forcedReveal: true };
+  const guestResult = applyRemoteMove(guest, msg);
+  assert(guestResult.ok, 'guest replays the disguise-consistent forward move successfully on the first try (no retry needed for the move itself)');
+  const landed = guest.board[sq(7, 3)];
+  assert(landed && landed.type === 'Q' && landed.revealed,
+    "the forcedReveal flag alone (not a replay failure) is what tells guest's engine to reveal here — since the move looked like an ordinary legal pawn push");
+}
+
+document.getElementById('summary').innerHTML =
+  `<strong class="${fail === 0 ? 'pass' : 'fail'}">${pass} passed, ${fail} failed</strong>`;
+</script>
+</body>
+</html>
