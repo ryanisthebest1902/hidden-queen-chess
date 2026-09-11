@@ -1,4 +1,4 @@
-// Hidden Queen Chess — Phase 1 multiplayer server.
+// Hidden Queen Chess — Phase 1+2 multiplayer server.
 //
 // Server-authoritative: this process holds the only true Engine per game.
 // Every outbound board-state payload goes through engine.getPublicView
@@ -7,16 +7,20 @@
 // both players. See section 1 of the build spec: this is the one rule that
 // matters more than anything else here.
 //
-// Scope, deliberately: direct-challenge links only, no accounts, no rating,
-// no matchmaking queue, no reconnection/resumeToken support yet (that's
-// Phase 4). A dropped connection currently just ends the game once the
-// opponent notices — there is no grace period or resume flow in this phase.
+// Phase 1 scope (direct-challenge links, live play) is unchanged. Phase 2
+// adds accounts (db.js/auth.js) and game-history persistence on top of it —
+// login is OPTIONAL, not required to play: an unauthenticated socket still
+// works exactly as in Phase 1, with a freeform display name and no history
+// saved. Still no matchmaking queue or rating (Phase 3), and no
+// reconnection/resumeToken support yet (Phase 4).
 
 const http = require('http');
 const crypto = require('crypto');
 const express = require('express');
 const { Server } = require('socket.io');
 const { Engine, sq, rankOf, fileOf, algebraic, otherColor } = require('../engine.js');
+const { pool, initSchema } = require('./db.js');
+const { signup, login, verifyToken } = require('./auth.js');
 
 const PORT = process.env.PORT || 8080;
 const SETUP_TIMEOUT_MS = 30000;
@@ -25,7 +29,51 @@ const CLOCK_SYNC_INTERVAL_MS = 1500;
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // unaccepted challenges expire after 10 min
 
 const app = express();
+app.use(express.json());
 app.get('/', (req, res) => res.send('Hidden Queen Chess server is running.'));
+
+app.post('/api/signup', async (req, res) => {
+  try {
+    const result = await signup(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('signup error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const result = await login(req.body || {});
+    if (!result.ok) return res.status(401).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('login error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+app.get('/api/me/games', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const user = verifyToken(token);
+  if (!user) return res.status(401).json({ ok: false, reason: 'unauthenticated' });
+  if (!pool) return res.status(503).json({ ok: false, reason: 'server_not_configured' });
+  try {
+    const result = await pool.query(
+      `SELECT id, white_name, black_name, time_control, result, end_reason, started_at, ended_at
+       FROM games WHERE white_user_id = $1 OR black_user_id = $1
+       ORDER BY ended_at DESC LIMIT 50`,
+      [user.id]
+    );
+    res.json({ ok: true, games: result.rows });
+  } catch (err) {
+    console.error('game history query error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: '*' },
@@ -107,8 +155,22 @@ function endGame(room, result, reason) {
   room.phase = 'over';
   stopRoomTimers(room);
   io.to(`game:${room.id}`).emit('gameOver', { result, reason });
-  // Phase 1 has no persistence/rematch yet — free the room shortly after.
+  persistCompletedGame(room, result, reason); // best-effort — never blocks the live game flow
+  // Phase 1 has no rematch yet — free the room shortly after.
   setTimeout(() => rooms.delete(room.id), 60000);
+}
+
+async function persistCompletedGame(room, result, reason) {
+  if (!pool) return; // DATABASE_URL not configured — skip silently, already warned at startup
+  try {
+    await pool.query(
+      `INSERT INTO games (white_user_id, black_user_id, white_name, black_name, time_control, result, end_reason, started_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [room.userIds.w, room.userIds.b, room.names.w, room.names.b, room.timeControl, result, reason, room.startedAt]
+    );
+  } catch (err) {
+    console.error('failed to persist completed game', err);
+  }
 }
 
 function resultForWinner(winnerColor) {
@@ -137,7 +199,7 @@ function finalizeSetupTimeout(room) {
   maybeBeginPlay(room);
 }
 
-function createGameRoom(aSocket, aName, bSocket, bName, timeControl) {
+function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeControl) {
   const gameId = crypto.randomUUID();
   const engine = new Engine();
   const aIsWhite = Math.random() < 0.5;
@@ -145,6 +207,8 @@ function createGameRoom(aSocket, aName, bSocket, bName, timeControl) {
   const blackSocket = aIsWhite ? bSocket : aSocket;
   const whiteName = aIsWhite ? aName : bName;
   const blackName = aIsWhite ? bName : aName;
+  const whiteUserId = aIsWhite ? aUserId : bUserId;
+  const blackUserId = aIsWhite ? bUserId : aUserId;
   const { baseMs, incMs } = parseTimeControl(timeControl);
 
   const room = {
@@ -152,11 +216,13 @@ function createGameRoom(aSocket, aName, bSocket, bName, timeControl) {
     engine,
     sockets: { w: whiteSocket.id, b: blackSocket.id },
     names: { w: whiteName, b: blackName },
+    userIds: { w: whiteUserId || null, b: blackUserId || null },
     timeControl,
     baseMs,
     incMs,
     msRemaining: { w: baseMs, b: baseMs },
     turnStartedAtServerTs: null,
+    startedAt: new Date(),
     phase: 'awaiting_setup',
     setupSubmitted: { w: false, b: false },
     setupTimer: null,
@@ -178,12 +244,19 @@ function createGameRoom(aSocket, aName, bSocket, bName, timeControl) {
 }
 
 io.on('connection', (socket) => {
+  // Login is optional — an authenticated socket gets its account's name/id
+  // attached; an unauthenticated one behaves exactly as in Phase 1.
+  const authUser = verifyToken(socket.handshake.auth && socket.handshake.auth.token);
+  if (authUser) socket.data.user = authUser;
+
   socket.on('createChallenge', ({ timeControl, name }) => {
     const code = genChallengeCode();
+    const displayName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
     challenges.set(code, {
       code,
       creatorSocketId: socket.id,
-      creatorName: (name || 'Player').slice(0, 24),
+      creatorName: displayName,
+      creatorUserId: socket.data.user ? socket.data.user.id : null,
       timeControl: timeControl || '10+0',
       createdAt: Date.now(),
     });
@@ -215,7 +288,9 @@ io.on('connection', (socket) => {
       return;
     }
     challenges.delete(upperCode);
-    createGameRoom(creatorSocket, challenge.creatorName, socket, (name || 'Player').slice(0, 24), challenge.timeControl);
+    const accepterName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
+    const accepterUserId = socket.data.user ? socket.data.user.id : null;
+    createGameRoom(creatorSocket, challenge.creatorName, challenge.creatorUserId, socket, accepterName, accepterUserId, challenge.timeControl);
   });
 
   socket.on('submitHiddenQueen', ({ square }) => {
@@ -335,6 +410,10 @@ io.on('connection', (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`Hidden Queen Chess server listening on :${PORT}`);
-});
+initSchema()
+  .catch((err) => console.error('Schema init failed (accounts/history may not work):', err))
+  .finally(() => {
+    httpServer.listen(PORT, () => {
+      console.log(`Hidden Queen Chess server listening on :${PORT}`);
+    });
+  });
