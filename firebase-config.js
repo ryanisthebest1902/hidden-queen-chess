@@ -42,7 +42,11 @@
 // That's it — once this file has real values, "Play Online" will work for
 // anyone who loads your GitHub Pages site.
 
-const FIREBASE_CONFIG = {
+// `window.` prefix is required here, not just `const` — ui.js reads this
+// off `window.FIREBASE_CONFIG`, and a plain top-level `const`/`let` in a
+// classic (non-module) <script> does NOT become a `window` property, so
+// that check would silently always fail without this.
+window.FIREBASE_CONFIG = {
   apiKey: "AIzaSyCSHR42Nst4TbFpGjGuV2CpfyT0AfqPOJc",
   authDomain: "hidden-queen-chess.firebaseapp.com",
   databaseURL: "https://hidden-queen-chess-default-rtdb.firebaseio.com",
