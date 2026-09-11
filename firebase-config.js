@@ -43,11 +43,11 @@
 // anyone who loads your GitHub Pages site.
 
 const FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyCSHR42Nst4TbFpGjGuV2CpfyT0AfqPOJc",
+  authDomain: "hidden-queen-chess.firebaseapp.com",
+  databaseURL: "https://hidden-queen-chess-default-rtdb.firebaseio.com",
+  projectId: "hidden-queen-chess",
+  storageBucket: "hidden-queen-chess.firebasestorage.app",
+  messagingSenderId: "898469313499",
+  appId: "1:898469313499:web:7d2ae777597d8931e205fe",
 };
