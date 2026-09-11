@@ -32,40 +32,64 @@
     { id: 'oracle',      name: 'Oracle',      elo: 3200, tier: 'Engine',      blurb: 'No ceiling. Full depth, full time budget, no mercy.' },
   ];
 
-  // Honesty check (spec section 6.8): a hand-rolled, clone-based (not
-  // make/unmake) JS search with a per-call transposition table and no late-
-  // move reductions realistically plays somewhere around 2200-2600 strength
-  // — NOT true 2800-3200. The top two labels are kept for the ladder's
-  // shape/range (matching chess.com's own advertised ceiling), but they are
-  // aspirational labels on this engine, not a claim of measured strength.
-  // Reaching an actually-2800+ engine would mean embedding a real one
-  // (Stockfish via WASM, etc.) — and the catch is it would still need to run
-  // INSIDE the determinization loop below (once per sampled world), not
-  // just get called once with the true position, or it would silently
-  // regain the exact omniscience section 5 forbids.
-  const ENGINE_CEILING_NOTE = 'A hand-rolled engine like this realistically plays around 2200-2600 strength. The 2800/3200 labels match the target ladder\'s shape, not a measured rating.';
+  // Honesty check (spec section 6.8), REVISED after live profiling: this
+  // hand-rolled, clone-based (not make/unmake) JS search costs roughly 3-4x
+  // more time per additional ply (measured: depth 3 ~100ms, depth 4 ~350ms,
+  // depth 5 ~2-5s, depth 6 ~5-8s, all with quiescence on). That makes
+  // depth 5-6 the realistic full-width ceiling for an interactive web game
+  // — NOT the depth 8-30 this table originally claimed. (That original
+  // table was calibrated against a search that turned out to be silently
+  // broken — see bot.js's null-move pruning fix — which made it run far
+  // faster than a correct search ever could; the "high Elo" tiers were
+  // both weaker AND less honest than intended.) A depth-5/6 engine with
+  // quiescence and this eval realistically plays somewhere around 1600-
+  // 2000 strength — the 2200-3200 labels are aspirational, matching the
+  // target ladder's shape/range (chess.com's own advertised ceiling), not
+  // a claim of measured rating. Reaching an actually-2200+ engine would
+  // mean embedding a real one (Stockfish via WASM, etc.) — and the catch
+  // is it would still need to run INSIDE the determinization loop below
+  // (once per sampled world), not just get called once with the true
+  // position, or it would silently regain the exact omniscience section 5
+  // forbids.
+  const ENGINE_CEILING_NOTE = 'A hand-rolled engine like this realistically plays around 1600-2000 strength — depth 5-6 full-width search is roughly this engine\'s ceiling for an interactive response time. Labels above that match the target ladder\'s shape, not a measured rating.';
 
   // Anchor table: elo -> {depth, timeMs, temperature, blunder, layers,
   // deception, samples}. See spec section 6.2/6.3 for the rationale behind
   // each knob; `samples` is the number of determinization worlds (section
   // 5) the bot considers — see bot.js.
+  //
+  // depth/timeMs/samples REBALANCED TWICE after live profiling, for two
+  // separate real bugs this exposed:
+  //  1. Splitting a shared time budget across too many samples starved
+  //     individual worlds of search time (e.g. "2800 Elo"/depth 8 was
+  //     actually landing at depth 2-4 in half its worlds) — fixed with
+  //     fewer samples per tier and depth-weighted aggregation in
+  //     chooseBotMove (a world that only reached depth 2 now counts for
+  //     much less than one that reached depth 8).
+  //  2. A null-move pruning bug (see bot.js) was silently collapsing
+  //     search into near-nothing whenever beta was unbounded — which is
+  //     true along the first-explored path at EVERY node, so this wasn't
+  //     an edge case, it was gutting most of the tree. Once fixed, real
+  //     (correct) search is dramatically slower than the numbers this
+  //     table was originally tuned against, which is why the depth
+  //     targets below are much lower than the original table's.
   const ANCHORS = [
     { elo: 250,  depth: 1,  timeMs: 60,   temperature: 1.5,   blunder: 0.35,   samples: 1, layers: { pst: false, mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
     { elo: 450,  depth: 1,  timeMs: 60,   temperature: 1.1,   blunder: 0.25,   samples: 1, layers: { pst: true,  mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
-    { elo: 650,  depth: 2,  timeMs: 60,   temperature: 0.9,   blunder: 0.18,   samples: 1, layers: { pst: true,  mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
-    { elo: 850,  depth: 2,  timeMs: 60,   temperature: 0.7,   blunder: 0.12,   samples: 1, layers: { pst: true,  mobility: true,  kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
-    { elo: 1000, depth: 2,  timeMs: 60,   temperature: 0.55,  blunder: 0.08,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: false, quiescence: false }, deception: 0.05 },
-    { elo: 1200, depth: 3,  timeMs: 60,   temperature: 0.4,   blunder: 0.05,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: false, quiescence: false }, deception: 0.15 },
-    { elo: 1400, depth: 3,  timeMs: 300,  temperature: 0.3,   blunder: 0.03,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.25 },
-    { elo: 1500, depth: 4,  timeMs: 300,  temperature: 0.25,  blunder: 0.025,  samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.35 },
-    { elo: 1700, depth: 4,  timeMs: 500,  temperature: 0.18,  blunder: 0.015,  samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.5 },
-    { elo: 1900, depth: 5,  timeMs: 600,  temperature: 0.12,  blunder: 0.01,   samples: 4, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.65 },
-    { elo: 2100, depth: 5,  timeMs: 800,  temperature: 0.08,  blunder: 0.005,  samples: 4, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.8 },
-    { elo: 2200, depth: 6,  timeMs: 1000, temperature: 0.05,  blunder: 0.003,  samples: 5, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.85 },
-    { elo: 2350, depth: 6,  timeMs: 1300, temperature: 0.03,  blunder: 0.001,  samples: 5, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.9 },
-    { elo: 2450, depth: 7,  timeMs: 1600, temperature: 0.015, blunder: 0.0005, samples: 6, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.95 },
-    { elo: 2800, depth: 8,  timeMs: 2500, temperature: 0.005, blunder: 0,      samples: 6, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 1 },
-    { elo: 3200, depth: 30, timeMs: 4000, temperature: 0,     blunder: 0,      samples: 8, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 1 },
+    { elo: 650,  depth: 2,  timeMs: 100,  temperature: 0.9,   blunder: 0.18,   samples: 1, layers: { pst: true,  mobility: false, kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
+    { elo: 850,  depth: 2,  timeMs: 150,  temperature: 0.7,   blunder: 0.12,   samples: 1, layers: { pst: true,  mobility: true,  kingSafety: false, pawnStructure: false, quiescence: false }, deception: 0 },
+    { elo: 1000, depth: 2,  timeMs: 200,  temperature: 0.55,  blunder: 0.08,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: false, quiescence: false }, deception: 0.05 },
+    { elo: 1200, depth: 3,  timeMs: 500,  temperature: 0.4,   blunder: 0.05,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: false, quiescence: false }, deception: 0.15 },
+    { elo: 1400, depth: 3,  timeMs: 700,  temperature: 0.3,   blunder: 0.03,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.25 },
+    { elo: 1500, depth: 3,  timeMs: 900,  temperature: 0.25,  blunder: 0.025,  samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.35 },
+    { elo: 1700, depth: 4,  timeMs: 1500, temperature: 0.18,  blunder: 0.015,  samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: false }, deception: 0.5 },
+    { elo: 1900, depth: 4,  timeMs: 2000, temperature: 0.12,  blunder: 0.01,   samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.65 },
+    { elo: 2100, depth: 4,  timeMs: 2500, temperature: 0.08,  blunder: 0.005,  samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.8 },
+    { elo: 2200, depth: 5,  timeMs: 3000, temperature: 0.05,  blunder: 0.003,  samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.85 },
+    { elo: 2350, depth: 5,  timeMs: 3500, temperature: 0.03,  blunder: 0.001,  samples: 2, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.9 },
+    { elo: 2450, depth: 5,  timeMs: 4000, temperature: 0.015, blunder: 0.0005, samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 0.95 },
+    { elo: 2800, depth: 5,  timeMs: 5000, temperature: 0.005, blunder: 0,      samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 1 },
+    { elo: 3200, depth: 6,  timeMs: 7000, temperature: 0,     blunder: 0,      samples: 3, layers: { pst: true,  mobility: true,  kingSafety: true,  pawnStructure: true,  quiescence: true  }, deception: 1 },
   ];
 
   function lerp(a, b, t) { return a + (b - a) * t; }

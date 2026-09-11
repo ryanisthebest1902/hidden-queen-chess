@@ -75,6 +75,12 @@
     shadow.gameOver = null;
     shadow.setupPhase = false;
     shadow.hiddenQueenId = { w: null, b: null };
+    // Public knowledge (whether either side has castled is visible on the
+    // board), and kingSafety's eval reads these rather than scanning
+    // history (which this shadow, like clone(), deliberately starts
+    // empty — see engine.js#clone for why).
+    shadow.castledWhite = realEngine.castledWhite;
+    shadow.castledBlack = realEngine.castledBlack;
     shadow._updateGameOver();
     return shadow;
   }
@@ -186,7 +192,7 @@
     let score = 0;
     const rank = rankOf(kingSq), file = fileOf(kingSq);
     const backRank = color === 'w' ? 0 : 7;
-    const castled = engine.history.some(h => h.isCastle && h.color === color);
+    const castled = color === 'w' ? engine.castledWhite : engine.castledBlack;
     if (castled) score += 60;
     else if (rank !== backRank) score -= 30;
     const shieldRank = color === 'w' ? rank + 1 : rank - 1;
@@ -323,9 +329,23 @@
     // Null-move pruning: skip our own move entirely and let the opponent
     // move twice in a row; if we're STILL doing fine even after "passing",
     // this position is safely good enough to prune without full search.
-    // Guarded against check (illegal to null-move there) and against
-    // king+pawn-only endings (zugzwang risk — a free tempo can matter).
-    if (allowNull && depth >= 3 && !engine.isInCheck(engine.turn)) {
+    // Guarded against check (illegal to null-move there), against
+    // king+pawn-only endings (zugzwang risk — a free tempo can matter), and
+    // — critically — against an unbounded beta. The probe's window is
+    // (-beta, -beta+1); when beta is Infinity (true along the "first"
+    // child explored at every node, e.g. every leftmost path from the
+    // root), -beta+1 still equals -Infinity in float arithmetic, so the
+    // window silently collapses to (-Infinity, -Infinity). That degenerate
+    // window then cascades through the ENTIRE probe subtree (every node
+    // it touches inherits an equally degenerate alpha===beta and cuts off
+    // after its first child), so the probe returns near-instantly on
+    // essentially no evaluation — and its garbage score then frequently
+    // satisfies `>= beta`, pruning the REAL subtree without ever having
+    // honestly evaluated it. This was silently gutting search quality at
+    // every PV node — iterative deepening would happily report "reached
+    // depth 30" while having explored only a few thousand nodes to get
+    // there, i.e. the bot was much weaker than its search depth implied.
+    if (allowNull && depth >= 3 && Number.isFinite(beta) && !engine.isInCheck(engine.turn)) {
       const nonPawnPieces = engine.board.some(p => p && p.color === engine.turn && p.type !== 'P' && p.type !== 'K');
       if (nonPawnPieces) {
         const nullChild = engine.clone();
@@ -395,15 +415,23 @@
   }
 
   // Runs the full iterative-deepening search on one hypothetical world,
-  // returning a Map<moveKey, score> for its root moves (the bot's own
-  // legal moves — see the module comment for why these can differ per
-  // world: a piece hypothesized as a queen can create a new pin/check that
-  // changes what's legal for the bot's own king).
+  // returning {scores: Map<moveKey, score>, reachedDepth} for its root
+  // moves (the bot's own legal moves — see the module comment for why
+  // these can differ per world: a piece hypothesized as a queen can create
+  // a new pin/check that changes what's legal for the bot's own king).
+  // reachedDepth matters beyond diagnostics: with `samples` worlds sharing
+  // one time budget, how deep any individual world actually got varies a
+  // lot (a tactically "loud" hypothetical position resolves fast via
+  // alpha-beta cutoffs; a quiet one burns the whole budget at shallow
+  // depth) — chooseBotMove uses this to weight worlds by how trustworthy
+  // their evaluation actually is, instead of averaging a depth-2 guess and
+  // a depth-10 read as if they were equally reliable.
   function searchWorld(world, cfg, deadline, tt) {
     let rootMoves = orderedMoves(world);
     const lastScores = new Map();
-    if (rootMoves.length === 0) return lastScores;
+    if (rootMoves.length === 0) return { scores: lastScores, reachedDepth: 0 };
     const stats = { nodes: 0 };
+    let reachedDepth = 0;
     try {
       for (let depth = 1; depth <= cfg.depth; depth++) {
         let alpha = -Infinity, beta = Infinity;
@@ -417,13 +445,14 @@
         }
         lastScores.clear();
         for (const [k, v] of depthScores) lastScores.set(k, v);
+        reachedDepth = depth;
         rootMoves = rootMoves.slice().sort((a, b) => (lastScores.get(moveKey(b)) ?? -Infinity) - (lastScores.get(moveKey(a)) ?? -Infinity));
         if (Date.now() > deadline) break;
       }
     } catch (e) {
       if (e !== TIME_UP) throw e;
     }
-    return lastScores;
+    return { scores: lastScores, reachedDepth, nodes: stats.nodes };
   }
 
   // Picks the bot's move via determinization/PIMC (see module comment):
@@ -459,20 +488,27 @@
     const deadline = Date.now() + cfg.timeMs;
     const perWorldDeadline = () => Math.min(deadline, Date.now() + Math.max(50, Math.floor(cfg.timeMs / assumedSquares.length)));
 
-    // aggregate: moveKey -> { sum, count, move }
+    // aggregate: moveKey -> { weightedSum, weight, count, move }. Each
+    // world's contribution is weighted by how deep IT actually searched
+    // (reachedDepth) — see searchWorld's comment for why worlds can't be
+    // trusted equally. Weight grows quadratically with depth: a depth-6
+    // read should count for meaningfully more than four depth-2 guesses
+    // averaged together, not the same.
     const aggregate = new Map();
     for (const assumed of assumedSquares) {
       const world = buildWorld(realEngine, botColor, assumed);
       const tt = new Map(); // fresh per world: different worlds' positions rarely collide in meaning, keep it simple/safe
       const worldDeadline = perWorldDeadline();
-      const scores = searchWorld(world, cfg, worldDeadline, tt);
+      const { scores, reachedDepth } = searchWorld(world, cfg, worldDeadline, tt);
+      const weight = Math.max(1, reachedDepth * reachedDepth);
       const rootMoves = orderedMoves(world);
       for (const m of rootMoves) {
         const k = moveKey(m);
         const s = scores.get(k);
         if (s === undefined) continue;
-        const entry = aggregate.get(k) || { sum: 0, count: 0, move: m };
-        entry.sum += s;
+        const entry = aggregate.get(k) || { weightedSum: 0, weight: 0, count: 0, move: m };
+        entry.weightedSum += s * weight;
+        entry.weight += weight;
         entry.count += 1;
         aggregate.set(k, entry);
       }
@@ -486,7 +522,7 @@
     const deceptionWeight = (cfg.deception || 0) * moveNumberFade(realEngine.fullmoveNumber || 1);
     const rankedMoves = Array.from(aggregate.values());
     const adjustedScore = (entry) => {
-      const avg = entry.sum / entry.count;
+      const avg = entry.weightedSum / entry.weight;
       // Prefer moves that stayed legal across more worlds — a move only
       // legal in a minority of hypotheses is a riskier bet on this being
       // one of those worlds.
@@ -531,7 +567,7 @@
 
   const BotExports = {
     chooseBotMove, buildWorld, findHiddenQueenCandidates, evaluate,
-    sampleWithTemperature, moveNumberFade,
+    sampleWithTemperature, moveNumberFade, searchWorld,
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = BotExports;

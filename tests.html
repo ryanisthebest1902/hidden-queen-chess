@@ -296,12 +296,39 @@ section('Uncertainty-aware bot (determinization / PIMC)');
 
   // A multi-sample search should still return a real, legal move quickly at a shallow tier.
   e.turn = 'b';
-  const cfg = window.HiddenQueenElo.getEngineConfig(1900); // samples: 4 per elo.js
+  const cfg = window.HiddenQueenElo.getEngineConfig(1900); // samples: 2 per elo.js
   const { chooseBotMove } = window.HiddenQueenBot;
   const move = chooseBotMove(e, 'b', cfg);
   assert(!!move, 'multi-world search returns a move');
   const legalCheck = e.legalMovesFrom(move.from).some(m => m.to === move.to);
   assert(legalCheck, 'the move chosen via determinization is confirmed legal against the true position');
+}
+
+// ---------- 10c. Regression guard: null-move pruning must not fire with
+// an unbounded beta (it did once — see bot.js's guard comment — and
+// silently collapsed search into near-nothing while still reporting deep
+// "reached" depths) ----------
+section('Search node-count sanity (null-move regression guard)');
+{
+  const { buildWorld, findHiddenQueenCandidates, searchWorld } = window.HiddenQueenBot;
+  const e = new Engine();
+  e.pickRandomHiddenQueenFor('w');
+  e.pickRandomHiddenQueenFor('b');
+  e.makeMove({ from: sq(1, 4), to: sq(3, 4) }); // e2-e4
+  const candidates = findHiddenQueenCandidates(e, 'b');
+  const world = buildWorld(e, 'b', candidates[0]);
+  const layers = { pst: true, mobility: true, kingSafety: true, pawnStructure: true, quiescence: false };
+
+  const shallow = searchWorld(world, { depth: 2, layers }, Date.now() + 5000, new Map());
+  const deeper = searchWorld(world, { depth: 4, layers }, Date.now() + 5000, new Map());
+  assert(deeper.reachedDepth === 4, `a depth-4 search with a generous budget actually reaches depth 4 (got ${deeper.reachedDepth})`);
+  // A genuine full-width search's node count grows sharply with depth (the
+  // branching factor compounds); the null-move bug flattened this growth
+  // to near-linear because it silently pruned almost everything once beta
+  // was unbounded, which is true along the first-explored path at EVERY
+  // node — not a rare edge case.
+  assert(deeper.nodes > shallow.nodes * 5,
+    `node count grows sharply from depth 2 to depth 4, not near-flat (depth2=${shallow.nodes} nodes, depth4=${deeper.nodes} nodes)`);
 }
 
 // ---------- 11. elo.js: engine config exists and scales sanely ----------

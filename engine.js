@@ -62,6 +62,12 @@ class Engine {
     this.gameOver = null; // null | {result, reason}
     this.setupPhase = true;
     this.hiddenQueenId = { w: null, b: null };
+    // Cheap booleans mirroring "has this color castled", kept in sync
+    // alongside `history` — bot.js's eval reads these instead of scanning
+    // the move history, since search clones (see clone() below) skip
+    // copying the full history array for performance but still need this.
+    this.castledWhite = false;
+    this.castledBlack = false;
     this._setupBoard();
   }
 
@@ -77,20 +83,52 @@ class Engine {
     }
   }
 
+  // Called at every single search node (bot.js clones a child for every
+  // move it considers), so this is hot-path code — worth keeping fast.
+  // Two deliberate corners cut versus a full snapshot, both safe because
+  // clone() is ONLY ever used for search, never for real game state
+  // (verified: grep the repo, every call site is inside bot.js):
+  //   - `history` starts empty instead of copying the real array. The one
+  //     thing eval code needs out of it (did this side castle) is tracked
+  //     via the cheap castledWhite/castledBlack booleans instead.
+  //   - `positionCounts` starts empty instead of copying the real map, so
+  //     threefold-repetition detection inside a search branch is scoped to
+  //     that branch's own moves, not the real game's prior history. A
+  //     search branch is only a handful of plies deep, so a "this exact
+  //     position already happened 3 times IN THIS BRANCH" false negative
+  //     against real-game history is a rare, minor loss — worth it for the
+  //     clone speed this buys back.
   clone() {
     const e = Object.create(Engine.prototype);
-    e.board = this.board.map(p => p ? Object.assign(new Piece(p.type, p.color, p.id), p) : null);
+    const srcBoard = this.board;
+    const board = new Array(64);
+    for (let i = 0; i < 64; i++) {
+      const p = srcBoard[i];
+      if (!p) { board[i] = null; continue; }
+      const c = Object.create(Piece.prototype);
+      c.type = p.type;
+      c.color = p.color;
+      c.id = p.id;
+      c.isHiddenQueen = p.isHiddenQueen;
+      c.disguiseType = p.disguiseType;
+      c.revealed = p.revealed;
+      c.hasMoved = p.hasMoved;
+      board[i] = c;
+    }
+    e.board = board;
     e.turn = this.turn;
     e.castling = { ...this.castling };
     e.epTarget = this.epTarget;
     e.halfmoveClock = this.halfmoveClock;
     e.fullmoveNumber = this.fullmoveNumber;
-    e.history = this.history.slice();
-    e.positionCounts = new Map(this.positionCounts);
+    e.history = [];
+    e.positionCounts = new Map();
     e._nextId = this._nextId;
     e.gameOver = this.gameOver;
     e.setupPhase = this.setupPhase;
     e.hiddenQueenId = { ...this.hiddenQueenId };
+    e.castledWhite = this.castledWhite;
+    e.castledBlack = this.castledBlack;
     return e;
   }
 
@@ -417,6 +455,7 @@ class Engine {
       this.board[chosen.rookTo] = rook;
       this.board[chosen.rookFrom] = null;
       if (rook) rook.hasMoved = true;
+      if (color === WHITE) this.castledWhite = true; else this.castledBlack = true;
     }
 
     // Promotion: only an ordinary (non-hidden, or already-revealed) pawn ever
