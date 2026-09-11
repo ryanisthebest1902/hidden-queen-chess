@@ -1,0 +1,18 @@
+{
+  "name": "hidden-queen-chess-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Server-authoritative multiplayer for Hidden Queen Chess (Phase 1: direct-challenge links, no accounts).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test/two-client-test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
+  }
+}

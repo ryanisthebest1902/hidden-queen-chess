@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hidden Queen Chess — Online Beta (Phase 1 test page)</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #1e1e24; color: #eee; margin: 0; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #999; font-size: 13px; margin-bottom: 16px; }
+  .layout { display: flex; gap: 24px; flex-wrap: wrap; }
+  .panel { background: #2a2a33; border-radius: 8px; padding: 12px 16px; }
+  input, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #555; background: #1e1e24; color: #eee; }
+  button { cursor: pointer; background: #3a5fcd; border-color: #3a5fcd; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.secondary { background: #444; border-color: #666; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  #board { display: grid; grid-template-columns: repeat(8, 44px); grid-template-rows: repeat(8, 44px); border: 2px solid #555; }
+  .sq { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold; cursor: pointer; user-select: none; }
+  .light { background: #3d3d47; }
+  .dark { background: #2a2a33; }
+  .selected { outline: 3px solid #ffd54a; outline-offset: -3px; }
+  .eligible { outline: 2px dashed #66d9ef; outline-offset: -2px; }
+  .white-piece { color: #fff; }
+  .black-piece { color: #7fb3ff; }
+  #log { width: 320px; height: 360px; overflow-y: auto; background: #16161b; padding: 8px; border-radius: 6px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; }
+  .clocks { display: flex; gap: 16px; font-variant-numeric: tabular-nums; font-size: 20px; margin: 8px 0; }
+  .clock-label { font-size: 11px; color: #999; display: block; }
+  .status { font-size: 13px; color: #9f9; margin: 4px 0; min-height: 18px; }
+</style>
+</head>
+<body>
+
+<h1>Hidden Queen Chess — Online Beta</h1>
+<div class="sub">Phase 1 test page for the new server-authoritative multiplayer. Not styled/finished — this exists to prove the protocol works between two real browsers before it gets wired into the real UI.</div>
+
+<div class="layout">
+  <div class="panel" style="min-width:280px">
+    <div class="row">
+      <label>Server URL: <input id="serverUrl" value="http://localhost:8080" size="28"></label>
+    </div>
+    <div class="row">
+      <label>Your name: <input id="name" value="Player" size="12"></label>
+      <label>Time control: <input id="timeControl" value="5+3" size="6"></label>
+    </div>
+    <div class="row">
+      <button id="btnConnect">Connect</button>
+      <span id="connStatus" class="status"></span>
+    </div>
+    <div class="row">
+      <button id="btnCreate" disabled>Create challenge</button>
+      <span id="challengeCode"></span>
+    </div>
+    <div class="row">
+      <input id="joinCode" placeholder="CODE" size="8" maxlength="5" style="text-transform:uppercase">
+      <button id="btnJoin" disabled>Join</button>
+    </div>
+    <div class="row">
+      <button id="btnResign" class="secondary" disabled>Resign</button>
+      <button id="btnOfferDraw" class="secondary" disabled>Offer draw</button>
+      <button id="btnAcceptDraw" class="secondary" disabled>Accept draw</button>
+    </div>
+    <div class="clocks">
+      <div><span class="clock-label">White</span><span id="clockW">--:--</span></div>
+      <div><span class="clock-label">Black</span><span id="clockB">--:--</span></div>
+    </div>
+    <div id="turnStatus" class="status"></div>
+    <div id="board"></div>
+  </div>
+  <div class="panel">
+    <div style="margin-bottom:6px; color:#999; font-size:12px;">Raw event log (every message received)</div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+(function () {
+  const FILES = 'abcdefgh';
+  function algebraic(idx) { const r = Math.floor(idx / 8), f = idx % 8; return FILES[f] + (r + 1); }
+  function fromAlgebraic(str) { const f = FILES.indexOf(str[0]); const r = parseInt(str[1], 10) - 1; return r * 8 + f; }
+
+  // The standard starting position is public knowledge — no secrets are
+  // involved before either player has even picked a hidden queen, so it's
+  // safe (and necessary) to build this locally rather than wait on the
+  // server, just so the setup screen has pieces to click.
+  function initialBoardForSetupDisplay() {
+    const back = ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R'];
+    const b = new Array(64).fill(null);
+    for (let f = 0; f < 8; f++) {
+      b[0 * 8 + f] = { type: back[f], color: 'w' };
+      b[1 * 8 + f] = { type: 'P', color: 'w' };
+      b[6 * 8 + f] = { type: 'P', color: 'b' };
+      b[7 * 8 + f] = { type: back[f], color: 'b' };
+    }
+    return b;
+  }
+
+  let socket = null;
+  let myColor = null;
+  let gameId = null;
+  let phase = 'idle'; // idle | awaiting_setup | in_progress | over
+  let board = new Array(64).fill(null);
+  let turn = 'w';
+  let selectedSquare = null;
+  let clocks = { white: null, black: null };
+  let drawOfferPending = false;
+
+  const $ = (id) => document.getElementById(id);
+  const boardEl = $('board');
+  const logEl = $('log');
+
+  function log(msg) {
+    const line = document.createElement('div');
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function fmtClock(ms) {
+    if (ms == null) return '--:--';
+    const s = Math.max(0, Math.round(ms / 1000));
+    const m = Math.floor(s / 60), r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
+  }
+
+  function renderClocks() {
+    $('clockW').textContent = fmtClock(clocks.white);
+    $('clockB').textContent = fmtClock(clocks.black);
+  }
+
+  function renderBoard() {
+    boardEl.innerHTML = '';
+    for (let r = 7; r >= 0; r--) {
+      for (let f = 0; f < 8; f++) {
+        const idx = r * 8 + f;
+        const sqEl = document.createElement('div');
+        sqEl.className = 'sq ' + (((r + f) % 2 === 0) ? 'dark' : 'light');
+        sqEl.dataset.idx = idx;
+        const p = board[idx];
+        if (p) {
+          sqEl.textContent = p.color === 'w' ? p.type : p.type.toLowerCase();
+          sqEl.classList.add(p.color === 'w' ? 'white-piece' : 'black-piece');
+        }
+        if (phase === 'awaiting_setup' && p && p.color === myColor && p.type !== 'K') {
+          sqEl.classList.add('eligible');
+        }
+        if (selectedSquare === idx) sqEl.classList.add('selected');
+        sqEl.addEventListener('click', () => onSquareClick(idx));
+        boardEl.appendChild(sqEl);
+      }
+    }
+  }
+
+  function onSquareClick(idx) {
+    if (phase === 'awaiting_setup') {
+      const p = board[idx];
+      if (!p || p.color !== myColor || p.type === 'K') return;
+      socket.emit('submitHiddenQueen', { square: algebraic(idx) });
+      log(`You submitted ${algebraic(idx)} as your hidden queen.`);
+      return;
+    }
+    if (phase !== 'in_progress' || myColor !== turn) return;
+    const p = board[idx];
+    if (selectedSquare == null) {
+      if (p && p.color === myColor) { selectedSquare = idx; renderBoard(); }
+      return;
+    }
+    if (idx === selectedSquare) { selectedSquare = null; renderBoard(); return; }
+    const from = algebraic(selectedSquare);
+    const to = algebraic(idx);
+    let promotion = null;
+    const movingPiece = board[selectedSquare];
+    if (movingPiece && movingPiece.type === 'P' && (Math.floor(idx / 8) === 0 || Math.floor(idx / 8) === 7)) {
+      promotion = prompt('Promote to (Q/R/B/N)?', 'Q');
+    }
+    socket.emit('makeMove', { from, to, promotion, clientMoveId: `${from}-${to}-${Date.now()}` });
+    selectedSquare = null;
+    renderBoard();
+  }
+
+  function updateTurnStatus() {
+    if (phase === 'awaiting_setup') {
+      $('turnStatus').textContent = 'Setup phase: click one of your own pieces (not the king) to be your hidden queen.';
+    } else if (phase === 'in_progress') {
+      $('turnStatus').textContent = turn === myColor ? 'Your move.' : "Opponent's move.";
+    } else if (phase === 'over') {
+      // set by gameOver handler
+    } else {
+      $('turnStatus').textContent = '';
+    }
+  }
+
+  function setButtons() {
+    $('btnResign').disabled = phase !== 'in_progress';
+    $('btnOfferDraw').disabled = phase !== 'in_progress';
+    $('btnAcceptDraw').disabled = !drawOfferPending;
+  }
+
+  $('btnConnect').addEventListener('click', () => {
+    const url = $('serverUrl').value.trim();
+    socket = io(url, { transports: ['websocket'] });
+
+    socket.onAny((event, payload) => log(`RECV ${event}: ${JSON.stringify(payload)}`));
+
+    socket.on('connect', () => {
+      $('connStatus').textContent = 'Connected.';
+      $('btnCreate').disabled = false;
+      $('btnJoin').disabled = false;
+    });
+    socket.on('disconnect', () => {
+      $('connStatus').textContent = 'Disconnected.';
+      $('btnCreate').disabled = true;
+      $('btnJoin').disabled = true;
+    });
+    socket.on('connect_error', (err) => { $('connStatus').textContent = 'Connect error: ' + err.message; });
+
+    socket.on('challengeCreated', ({ code }) => {
+      $('challengeCode').textContent = `Code: ${code} — send this to your opponent.`;
+    });
+    socket.on('challengeInvalid', ({ code, reason }) => {
+      alert(`Challenge code "${code}" is invalid${reason ? ' (' + reason + ')' : ''}.`);
+    });
+
+    socket.on('matchFound', ({ gameId: gid, yourColor, opponentName, timeControl }) => {
+      gameId = gid; myColor = yourColor; phase = 'awaiting_setup';
+      board = initialBoardForSetupDisplay();
+      log(`Matched! You are ${yourColor === 'w' ? 'White' : 'Black'} vs ${opponentName}, time control ${timeControl}.`);
+      updateTurnStatus(); renderBoard(); setButtons();
+    });
+
+    socket.on('gameStart', ({ state, clocks: c }) => {
+      phase = 'in_progress';
+      board = state.board; turn = state.turn; clocks = c;
+      renderBoard(); renderClocks(); updateTurnStatus(); setButtons();
+    });
+
+    socket.on('moveApplied', ({ state, clocks: c }) => {
+      board = state.board; turn = state.turn; clocks = c;
+      drawOfferPending = false;
+      renderBoard(); renderClocks(); updateTurnStatus(); setButtons();
+    });
+
+    socket.on('moveRejected', ({ reason, state }) => {
+      log(`Move rejected: ${reason}`);
+      if (state) { board = state.board; turn = state.turn; renderBoard(); }
+    });
+
+    socket.on('revealEvent', ({ square, trueType }) => {
+      log(`>>> REVEAL: the piece on ${square} was actually a hidden ${trueType}!`);
+    });
+
+    socket.on('clockSync', (c) => { clocks = { white: c.white, black: c.black }; renderClocks(); });
+
+    socket.on('drawOffered', ({ byColor }) => {
+      if (byColor !== myColor) { drawOfferPending = true; setButtons(); log('Opponent offered a draw.'); }
+    });
+
+    socket.on('opponentDisconnected', () => log('Opponent disconnected (no reconnect support yet in Phase 1).'));
+    socket.on('opponentReconnected', () => log('Opponent reconnected.'));
+
+    socket.on('gameOver', ({ result, reason }) => {
+      phase = 'over';
+      $('turnStatus').textContent = `Game over: ${result} (${reason})`;
+      setButtons();
+    });
+  });
+
+  $('btnCreate').addEventListener('click', () => {
+    socket.emit('createChallenge', { timeControl: $('timeControl').value, name: $('name').value });
+  });
+  $('btnJoin').addEventListener('click', () => {
+    const code = $('joinCode').value.trim().toUpperCase();
+    socket.emit('acceptChallenge', { code, name: $('name').value });
+  });
+  $('btnResign').addEventListener('click', () => { if (confirm('Resign?')) socket.emit('resign'); });
+  $('btnOfferDraw').addEventListener('click', () => socket.emit('offerDraw'));
+  $('btnAcceptDraw').addEventListener('click', () => { socket.emit('respondDraw', { accept: true }); drawOfferPending = false; setButtons(); });
+
+  renderBoard();
+})();
+</script>
+</body>
+</html>

@@ -1,3 +1,6 @@
 # Local dev-server helper scripts (not part of the shipped app)
 _serve.ps1
 serve.ps1
+
+# Node dependencies (installed via npm install, not committed)
+node_modules/
