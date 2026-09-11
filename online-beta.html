@@ -32,15 +32,38 @@
 <body>
 
 <h1>Hidden Queen Chess — Online Beta</h1>
-<div class="sub">Phase 1 test page for the new server-authoritative multiplayer. Not styled/finished — this exists to prove the protocol works between two real browsers before it gets wired into the real UI.</div>
+<div class="sub">Phase 1+2 test page for the new server-authoritative multiplayer. Not styled/finished — this exists to prove the protocol works between two real browsers before it gets wired into the real UI.</div>
 
 <div class="layout">
   <div class="panel" style="min-width:280px">
     <div class="row">
       <label>Server URL: <input id="serverUrl" value="https://hidden-queen-chess-fmrf.onrender.com" size="34"></label>
     </div>
+
+    <div style="border-bottom:1px solid #444; margin:10px 0; padding-bottom:10px;">
+      <div id="loggedOutBox">
+        <div class="row">
+          <input id="authEmail" placeholder="email" size="18">
+          <input id="authPassword" type="password" placeholder="password" size="14">
+        </div>
+        <div class="row">
+          <input id="authDisplayName" placeholder="display name (for sign up)" size="16">
+          <button id="btnSignup" class="secondary">Sign up</button>
+          <button id="btnLogin" class="secondary">Log in</button>
+        </div>
+        <div id="authStatus" class="status"></div>
+      </div>
+      <div id="loggedInBox" style="display:none">
+        <div class="row">
+          <span>Logged in as <strong id="accountName"></strong></span>
+          <button id="btnLogout" class="secondary">Log out</button>
+          <button id="btnHistory" class="secondary">My game history</button>
+        </div>
+      </div>
+    </div>
+
     <div class="row">
-      <label>Your name: <input id="name" value="Player" size="12"></label>
+      <label>Your name (ignored if logged in): <input id="name" value="Player" size="12"></label>
       <label>Time control: <input id="timeControl" value="5+3" size="6"></label>
     </div>
     <div class="row">
@@ -109,6 +132,80 @@
   const $ = (id) => document.getElementById(id);
   const boardEl = $('board');
   const logEl = $('log');
+
+  // ---------- Account (Phase 2) ----------
+  // Token/account persist in localStorage so a reload doesn't log you out —
+  // this is per-browser only, same as any normal "remember me" session.
+  let account = null; // { token, id, displayName } | null
+  try {
+    const saved = localStorage.getItem('hqc_account');
+    if (saved) account = JSON.parse(saved);
+  } catch { /* localStorage unavailable or corrupted — just stay logged out */ }
+
+  function renderAccountBox() {
+    $('loggedOutBox').style.display = account ? 'none' : '';
+    $('loggedInBox').style.display = account ? '' : 'none';
+    if (account) $('accountName').textContent = account.displayName;
+  }
+
+  async function authRequest(pathName, body) {
+    const url = $('serverUrl').value.trim();
+    const res = await fetch(`${url}${pathName}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  }
+
+  $('btnSignup').addEventListener('click', async () => {
+    const email = $('authEmail').value.trim();
+    const password = $('authPassword').value;
+    const displayName = $('authDisplayName').value.trim();
+    $('authStatus').textContent = 'Signing up...';
+    try {
+      const { body } = await authRequest('/api/signup', { email, password, displayName });
+      if (!body.ok) { $('authStatus').textContent = 'Sign up failed: ' + body.reason; return; }
+      account = { token: body.token, id: body.user.id, displayName: body.user.displayName };
+      localStorage.setItem('hqc_account', JSON.stringify(account));
+      $('authStatus').textContent = '';
+      renderAccountBox();
+    } catch (err) { $('authStatus').textContent = 'Sign up error: ' + err.message; }
+  });
+
+  $('btnLogin').addEventListener('click', async () => {
+    const email = $('authEmail').value.trim();
+    const password = $('authPassword').value;
+    $('authStatus').textContent = 'Logging in...';
+    try {
+      const { body } = await authRequest('/api/login', { email, password });
+      if (!body.ok) { $('authStatus').textContent = 'Log in failed: ' + body.reason; return; }
+      account = { token: body.token, id: body.user.id, displayName: body.user.displayName };
+      localStorage.setItem('hqc_account', JSON.stringify(account));
+      $('authStatus').textContent = '';
+      renderAccountBox();
+    } catch (err) { $('authStatus').textContent = 'Log in error: ' + err.message; }
+  });
+
+  $('btnLogout').addEventListener('click', () => {
+    account = null;
+    localStorage.removeItem('hqc_account');
+    renderAccountBox();
+  });
+
+  $('btnHistory').addEventListener('click', async () => {
+    const url = $('serverUrl').value.trim();
+    try {
+      const res = await fetch(`${url}/api/me/games`, { headers: { Authorization: `Bearer ${account.token}` } });
+      const body = await res.json();
+      if (!body.ok) { log('History fetch failed: ' + body.reason); return; }
+      if (body.games.length === 0) { log('No completed games yet.'); return; }
+      log(`--- Your last ${body.games.length} game(s) ---`);
+      for (const g of body.games) {
+        log(`${g.white_name} vs ${g.black_name} — ${g.result} (${g.end_reason}), ${new Date(g.ended_at).toLocaleString()}`);
+      }
+    } catch (err) { log('History fetch error: ' + err.message); }
+  });
+
+  renderAccountBox();
 
   function log(msg) {
     const line = document.createElement('div');
@@ -199,7 +296,7 @@
 
   $('btnConnect').addEventListener('click', () => {
     const url = $('serverUrl').value.trim();
-    socket = io(url, { transports: ['websocket'] });
+    socket = io(url, { transports: ['websocket'], auth: account ? { token: account.token } : {} });
 
     socket.onAny((event, payload) => log(`RECV ${event}: ${JSON.stringify(payload)}`));
 
@@ -267,11 +364,11 @@
   });
 
   $('btnCreate').addEventListener('click', () => {
-    socket.emit('createChallenge', { timeControl: $('timeControl').value, name: $('name').value });
+    socket.emit('createChallenge', { timeControl: $('timeControl').value, name: account ? undefined : $('name').value });
   });
   $('btnJoin').addEventListener('click', () => {
     const code = $('joinCode').value.trim().toUpperCase();
-    socket.emit('acceptChallenge', { code, name: $('name').value });
+    socket.emit('acceptChallenge', { code, name: account ? undefined : $('name').value });
   });
   $('btnResign').addEventListener('click', () => { if (confirm('Resign?')) socket.emit('resign'); });
   $('btnOfferDraw').addEventListener('click', () => socket.emit('offerDraw'));

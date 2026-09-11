@@ -30,6 +30,16 @@ const CHALLENGE_TTL_MS = 10 * 60 * 1000; // unaccepted challenges expire after 1
 
 const app = express();
 app.use(express.json());
+// CORS for the plain HTTP routes — separate from Socket.IO's own CORS
+// handling below, since browsers enforce fetch()/XHR CORS independently of
+// whatever the WebSocket transport allows.
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.get('/', (req, res) => res.send('Hidden Queen Chess server is running.'));
 
 app.post('/api/signup', async (req, res) => {
