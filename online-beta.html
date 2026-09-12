@@ -78,6 +78,16 @@
       <input id="joinCode" placeholder="CODE" size="8" maxlength="5" style="text-transform:uppercase">
       <button id="btnJoin" disabled>Join</button>
     </div>
+    <div class="row" style="border-top:1px solid #444; padding-top:8px;">
+      <button id="btnJoinQueue" class="secondary" disabled>Join rated queue</button>
+      <button id="btnCancelQueue" class="secondary" disabled>Cancel queue</button>
+      <span id="queueStatus" class="status"></span>
+    </div>
+    <div class="row">
+      <button id="btnMyRatings" class="secondary">My ratings</button>
+      <select id="leaderboardClass"><option value="bullet">Bullet</option><option value="blitz" selected>Blitz</option><option value="rapid">Rapid</option></select>
+      <button id="btnLeaderboard" class="secondary">Leaderboard</button>
+    </div>
     <div class="row">
       <button id="btnResign" class="secondary" disabled>Resign</button>
       <button id="btnOfferDraw" class="secondary" disabled>Offer draw</button>
@@ -304,11 +314,14 @@
       $('connStatus').textContent = 'Connected.';
       $('btnCreate').disabled = false;
       $('btnJoin').disabled = false;
+      $('btnJoinQueue').disabled = !account;
     });
     socket.on('disconnect', () => {
       $('connStatus').textContent = 'Disconnected.';
       $('btnCreate').disabled = true;
       $('btnJoin').disabled = true;
+      $('btnJoinQueue').disabled = true;
+      $('btnCancelQueue').disabled = true;
     });
     socket.on('connect_error', (err) => { $('connStatus').textContent = 'Connect error: ' + err.message; });
 
@@ -319,11 +332,29 @@
       alert(`Challenge code "${code}" is invalid${reason ? ' (' + reason + ')' : ''}.`);
     });
 
-    socket.on('matchFound', ({ gameId: gid, yourColor, opponentName, timeControl }) => {
+    socket.on('queueJoined', ({ timeControl }) => {
+      $('queueStatus').textContent = `In queue (${timeControl})...`;
+      $('btnJoinQueue').disabled = true;
+      $('btnCancelQueue').disabled = false;
+    });
+    socket.on('queueRejected', ({ reason }) => {
+      $('queueStatus').textContent = `Queue rejected: ${reason}`;
+    });
+
+    socket.on('matchFound', ({ gameId: gid, yourColor, opponentName, opponentRating, rated, timeControl }) => {
       gameId = gid; myColor = yourColor; phase = 'awaiting_setup';
       board = initialBoardForSetupDisplay();
-      log(`Matched! You are ${yourColor === 'w' ? 'White' : 'Black'} vs ${opponentName}, time control ${timeControl}.`);
+      $('queueStatus').textContent = '';
+      $('btnJoinQueue').disabled = !account;
+      $('btnCancelQueue').disabled = true;
+      const ratingNote = rated ? ` [RATED, opponent ~${opponentRating}]` : '';
+      log(`Matched! You are ${yourColor === 'w' ? 'White' : 'Black'} vs ${opponentName}, time control ${timeControl}.${ratingNote}`);
       updateTurnStatus(); renderBoard(); setButtons();
+    });
+
+    socket.on('ratingUpdate', ({ timeClass, before, after }) => {
+      const delta = after - before;
+      log(`Rating update (${timeClass}): ${before} -> ${after} (${delta >= 0 ? '+' : ''}${delta})`);
     });
 
     socket.on('gameStart', ({ state, clocks: c }) => {
@@ -373,6 +404,44 @@
   $('btnResign').addEventListener('click', () => { if (confirm('Resign?')) socket.emit('resign'); });
   $('btnOfferDraw').addEventListener('click', () => socket.emit('offerDraw'));
   $('btnAcceptDraw').addEventListener('click', () => { socket.emit('respondDraw', { accept: true }); drawOfferPending = false; setButtons(); });
+
+  $('btnJoinQueue').addEventListener('click', () => {
+    if (!account) { log('Log in first — matchmaking requires an account.'); return; }
+    socket.emit('joinQueue', { timeControl: $('timeControl').value });
+  });
+  $('btnCancelQueue').addEventListener('click', () => {
+    socket.emit('cancelQueue');
+    $('queueStatus').textContent = '';
+    $('btnJoinQueue').disabled = !account;
+    $('btnCancelQueue').disabled = true;
+  });
+
+  $('btnMyRatings').addEventListener('click', async () => {
+    if (!account) { log('Log in first to see your ratings.'); return; }
+    const url = $('serverUrl').value.trim();
+    try {
+      const res = await fetch(`${url}/api/me/ratings`, { headers: { Authorization: `Bearer ${account.token}` } });
+      const body = await res.json();
+      if (!body.ok) { log('Ratings fetch failed: ' + body.reason); return; }
+      log('--- Your ratings ---');
+      for (const r of body.ratings) {
+        log(`${r.timeClass}: ${r.rating}${r.provisional ? ' (provisional)' : ''} — ${r.gamesPlayed} game(s) played`);
+      }
+    } catch (err) { log('Ratings fetch error: ' + err.message); }
+  });
+
+  $('btnLeaderboard').addEventListener('click', async () => {
+    const url = $('serverUrl').value.trim();
+    const timeClass = $('leaderboardClass').value;
+    try {
+      const res = await fetch(`${url}/api/leaderboard/${timeClass}`);
+      const body = await res.json();
+      if (!body.ok) { log('Leaderboard fetch failed: ' + body.reason); return; }
+      log(`--- ${timeClass} leaderboard ---`);
+      if (body.leaderboard.length === 0) { log('(no rated games yet in this time class)'); }
+      body.leaderboard.forEach((r, i) => log(`${i + 1}. ${r.displayName} — ${r.rating} (${r.gamesPlayed} games)`));
+    } catch (err) { log('Leaderboard fetch error: ' + err.message); }
+  });
 
   renderBoard();
 })();

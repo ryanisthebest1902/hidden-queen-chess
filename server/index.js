@@ -21,12 +21,16 @@ const { Server } = require('socket.io');
 const { Engine, sq, rankOf, fileOf, algebraic, otherColor } = require('../engine.js');
 const { pool, initSchema } = require('./db.js');
 const { signup, login, verifyToken } = require('./auth.js');
+const { timeClassOf, applyGameResult, getRatingsForUser, getLeaderboard } = require('./ratings.js');
 
 const PORT = process.env.PORT || 8080;
 const SETUP_TIMEOUT_MS = 30000;
 const LAG_GRACE_MS = 1500; // small, symmetric clock grace for message transit time (spec section 2/10)
 const CLOCK_SYNC_INTERVAL_MS = 1500;
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // unaccepted challenges expire after 10 min
+const MATCH_INTERVAL_MS = 1000;
+const TOLERANCE_WIDEN_MS = 7500; // matchmaking rating tolerance widens this often while waiting (spec section 8)
+const TOLERANCE_MAX = 400;
 
 const app = express();
 app.use(express.json());
@@ -72,7 +76,8 @@ app.get('/api/me/games', async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false, reason: 'server_not_configured' });
   try {
     const result = await pool.query(
-      `SELECT id, white_name, black_name, time_control, result, end_reason, started_at, ended_at
+      `SELECT id, white_name, black_name, time_control, result, end_reason, started_at, ended_at,
+              rated, white_rating_before, white_rating_after, black_rating_before, black_rating_after
        FROM games WHERE white_user_id = $1 OR black_user_id = $1
        ORDER BY ended_at DESC LIMIT 50`,
       [user.id]
@@ -80,6 +85,35 @@ app.get('/api/me/games', async (req, res) => {
     res.json({ ok: true, games: result.rows });
   } catch (err) {
     console.error('game history query error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+app.get('/api/me/ratings', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const user = verifyToken(token);
+  if (!user) return res.status(401).json({ ok: false, reason: 'unauthenticated' });
+  try {
+    const ratings = await getRatingsForUser(user.id);
+    res.json({ ok: true, ratings });
+  } catch (err) {
+    console.error('ratings query error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+app.get('/api/leaderboard/:timeClass', async (req, res) => {
+  const timeClass = req.params.timeClass;
+  if (!['bullet', 'blitz', 'rapid'].includes(timeClass)) {
+    return res.status(400).json({ ok: false, reason: 'invalid_time_class' });
+  }
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+    const leaderboard = await getLeaderboard(timeClass, limit);
+    res.json({ ok: true, timeClass, leaderboard });
+  } catch (err) {
+    console.error('leaderboard query error', err);
     res.status(500).json({ ok: false, reason: 'server_error' });
   }
 });
@@ -93,6 +127,8 @@ const io = new Server(httpServer, {
 const challenges = new Map();
 /** @type {Map<string, GameRoom>} */
 const rooms = new Map();
+/** @type {Map<string, Array<{socketId:string, userId:string, displayName:string, rating:number, timeControl:string, joinedAt:number}>>} */
+const queuesByTimeControl = new Map();
 
 function fromAlgebraic(str) {
   const file = str.charCodeAt(0) - 97;
@@ -120,6 +156,50 @@ function roomForSocket(socket) {
   const gameId = socket.data.gameId;
   return gameId ? rooms.get(gameId) : null;
 }
+
+function removeFromQueue(socketId) {
+  for (const list of queuesByTimeControl.values()) {
+    const idx = list.findIndex((e) => e.socketId === socketId);
+    if (idx !== -1) list.splice(idx, 1);
+  }
+}
+
+// Runs every MATCH_INTERVAL_MS. Within each timeControl bucket, pairs the
+// oldest-waiting entries first and widens the acceptable rating gap the
+// longer a pair has been waiting (spec section 8) — a simple, un-thin-queue
+// -aware version (no separate "is the queue thin right now" signal yet;
+// TOLERANCE_WIDEN_MS alone already gets a lone player matched within a
+// couple of minutes even in a small queue).
+function runMatchmakingTick() {
+  for (const [tc, list] of queuesByTimeControl.entries()) {
+    list.sort((a, b) => a.joinedAt - b.joinedAt);
+    const matched = new Set();
+    for (let i = 0; i < list.length; i++) {
+      if (matched.has(i)) continue;
+      for (let j = i + 1; j < list.length; j++) {
+        if (matched.has(j)) continue;
+        const a = list[i], b = list[j];
+        const waited = Date.now() - Math.min(a.joinedAt, b.joinedAt);
+        const tolerance = Math.min(50 + 25 * Math.floor(waited / TOLERANCE_WIDEN_MS), TOLERANCE_MAX);
+        if (Math.abs(a.rating - b.rating) <= tolerance) {
+          matched.add(i); matched.add(j);
+          const socketA = io.sockets.sockets.get(a.socketId);
+          const socketB = io.sockets.sockets.get(b.socketId);
+          if (socketA && socketB) {
+            createGameRoom(socketA, a.displayName, a.userId, socketB, b.displayName, b.userId, tc, true, Math.round(a.rating), Math.round(b.rating));
+          }
+          if (socketA) socketA.data.queuedTimeControl = null;
+          if (socketB) socketB.data.queuedTimeControl = null;
+          break;
+        }
+      }
+    }
+    if (matched.size > 0) {
+      queuesByTimeControl.set(tc, list.filter((_, idx) => !matched.has(idx)));
+    }
+  }
+}
+setInterval(runMatchmakingTick, MATCH_INTERVAL_MS);
 
 function sanitizedState(room, viewerColor) {
   return {
@@ -173,11 +253,32 @@ function endGame(room, result, reason) {
 async function persistCompletedGame(room, result, reason) {
   if (!pool) return; // DATABASE_URL not configured — skip silently, already warned at startup
   try {
+    let ratingResult = null;
+    // Only matchmaking games are rated (spec section 8/12) — a direct
+    // challenge is a casual game between two people who found each other,
+    // not a competitive pairing, so it never touches either account's
+    // rating even when both sides are logged in.
+    if (room.rated && room.userIds.w && room.userIds.b) {
+      ratingResult = await applyGameResult({
+        whiteUserId: room.userIds.w, blackUserId: room.userIds.b, timeControl: room.timeControl, result,
+      });
+    }
     await pool.query(
-      `INSERT INTO games (white_user_id, black_user_id, white_name, black_name, time_control, result, end_reason, started_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [room.userIds.w, room.userIds.b, room.names.w, room.names.b, room.timeControl, result, reason, room.startedAt]
+      `INSERT INTO games (
+         white_user_id, black_user_id, white_name, black_name, time_control, result, end_reason, started_at,
+         rated, time_class, white_rating_before, white_rating_after, black_rating_before, black_rating_after
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [
+        room.userIds.w, room.userIds.b, room.names.w, room.names.b, room.timeControl, result, reason, room.startedAt,
+        !!ratingResult, ratingResult ? ratingResult.timeClass : null,
+        ratingResult ? ratingResult.white.before : null, ratingResult ? ratingResult.white.after : null,
+        ratingResult ? ratingResult.black.before : null, ratingResult ? ratingResult.black.after : null,
+      ]
     );
+    if (ratingResult) {
+      io.to(room.sockets.w).emit('ratingUpdate', { timeClass: ratingResult.timeClass, before: Math.round(ratingResult.white.before), after: Math.round(ratingResult.white.after) });
+      io.to(room.sockets.b).emit('ratingUpdate', { timeClass: ratingResult.timeClass, before: Math.round(ratingResult.black.before), after: Math.round(ratingResult.black.after) });
+    }
   } catch (err) {
     console.error('failed to persist completed game', err);
   }
@@ -209,7 +310,7 @@ function finalizeSetupTimeout(room) {
   maybeBeginPlay(room);
 }
 
-function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeControl) {
+function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeControl, rated = false, aRating = null, bRating = null) {
   const gameId = crypto.randomUUID();
   const engine = new Engine();
   const aIsWhite = Math.random() < 0.5;
@@ -219,6 +320,8 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
   const blackName = aIsWhite ? bName : aName;
   const whiteUserId = aIsWhite ? aUserId : bUserId;
   const blackUserId = aIsWhite ? bUserId : aUserId;
+  const whiteRating = aIsWhite ? aRating : bRating;
+  const blackRating = aIsWhite ? bRating : aRating;
   const { baseMs, incMs } = parseTimeControl(timeControl);
 
   const room = {
@@ -227,6 +330,7 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
     sockets: { w: whiteSocket.id, b: blackSocket.id },
     names: { w: whiteName, b: blackName },
     userIds: { w: whiteUserId || null, b: blackUserId || null },
+    rated,
     timeControl,
     baseMs,
     incMs,
@@ -246,8 +350,8 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
   whiteSocket.join(`game:${gameId}`);
   blackSocket.join(`game:${gameId}`);
 
-  whiteSocket.emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, timeControl });
-  blackSocket.emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, timeControl });
+  whiteSocket.emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl });
+  blackSocket.emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl });
 
   room.setupTimer = setTimeout(() => finalizeSetupTimeout(room), SETUP_TIMEOUT_MS);
   return room;
@@ -301,6 +405,42 @@ io.on('connection', (socket) => {
     const accepterName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
     const accepterUserId = socket.data.user ? socket.data.user.id : null;
     createGameRoom(creatorSocket, challenge.creatorName, challenge.creatorUserId, socket, accepterName, accepterUserId, challenge.timeControl);
+  });
+
+  socket.on('joinQueue', async ({ timeControl }) => {
+    // Rated matchmaking requires an account — an anonymous player can
+    // still use direct-challenge links, just not the rating-based queue,
+    // since there'd be no rating to match on or update.
+    if (!socket.data.user) {
+      socket.emit('queueRejected', { reason: 'login_required' });
+      return;
+    }
+    if (socket.data.gameId || socket.data.queuedTimeControl) {
+      socket.emit('queueRejected', { reason: 'already_queued_or_in_game' });
+      return;
+    }
+    const tc = timeControl || '10+0';
+    const timeClass = timeClassOf(tc);
+    let rating = 1500;
+    try {
+      const ratings = await getRatingsForUser(socket.data.user.id);
+      const match = ratings.find((r) => r.timeClass === timeClass);
+      if (match) rating = match.rating;
+    } catch (err) {
+      console.error('failed to look up rating for matchmaking', err);
+    }
+    if (!queuesByTimeControl.has(tc)) queuesByTimeControl.set(tc, []);
+    queuesByTimeControl.get(tc).push({
+      socketId: socket.id, userId: socket.data.user.id, displayName: socket.data.user.displayName,
+      rating, timeControl: tc, joinedAt: Date.now(),
+    });
+    socket.data.queuedTimeControl = tc;
+    socket.emit('queueJoined', { timeControl: tc });
+  });
+
+  socket.on('cancelQueue', () => {
+    removeFromQueue(socket.id);
+    socket.data.queuedTimeControl = null;
   });
 
   socket.on('submitHiddenQueen', ({ square }) => {
@@ -410,6 +550,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const code = socket.data.pendingChallengeCode;
     if (code) challenges.delete(code);
+    removeFromQueue(socket.id);
     const room = roomForSocket(socket);
     if (!room || room.phase === 'over') return;
     // Phase 1: no reconnection/grace period yet (that's Phase 4) — just let
