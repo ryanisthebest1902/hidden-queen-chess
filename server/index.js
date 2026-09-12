@@ -16,6 +16,9 @@
 // before a game is forfeited, and — just as important — NOT restricting the
 // client to WebSocket-only, so a network that blocks the WebSocket upgrade
 // handshake can still fall back to long-polling (see online-beta.html).
+// Phase 5 adds abuse hardening (rateLimit.js): per-socket message-flood
+// protection, per-IP signup/login throttling, and per-account matchmaking
+// queue-spam throttling.
 
 const http = require('http');
 const crypto = require('crypto');
@@ -25,6 +28,7 @@ const { Engine, sq, rankOf, fileOf, algebraic, otherColor } = require('../engine
 const { pool, initSchema } = require('./db.js');
 const { signup, login, verifyToken } = require('./auth.js');
 const { timeClassOf, applyGameResult, getRatingsForUser, getLeaderboard } = require('./ratings.js');
+const { createRateLimiter } = require('./rateLimit.js');
 
 const PORT = process.env.PORT || 8080;
 const SETUP_TIMEOUT_MS = 30000;
@@ -38,7 +42,20 @@ const TOLERANCE_MAX = 400;
 // period instead of waiting 90 real seconds for a forfeiture to fire.
 const DISCONNECT_GRACE_MS = parseInt(process.env.DISCONNECT_GRACE_MS, 10) || 90000;
 
+// No legitimate client sends this many of any one thing this fast — a
+// human clicking, or even a bot playing at full speed with premoves,
+// tops out far below this. Socket-wide (not per-event) on purpose: the
+// concern is a flood, not any single event type.
+const SOCKET_MESSAGE_LIMIT_WINDOW_MS = 5000;
+const SOCKET_MESSAGE_LIMIT_MAX = 60;
+const checkSocketMessageRate = createRateLimiter({ windowMs: SOCKET_MESSAGE_LIMIT_WINDOW_MS, max: SOCKET_MESSAGE_LIMIT_MAX });
+
+const checkSignupRateByIp = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 8 }); // 8 signups/hour/IP
+const checkLoginRateByIp = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 20 }); // 20 attempts/10min/IP — generous enough for a real person fumbling a password, tight enough to slow a brute force
+const checkQueueActionRate = createRateLimiter({ windowMs: 10 * 1000, max: 8 }); // 8 join/cancel calls per 10s per account
+
 const app = express();
+app.set('trust proxy', 1); // Render sits behind one reverse-proxy hop — needed for req.ip to be the real client IP, not Render's internal address
 app.use(express.json());
 // CORS for the plain HTTP routes — separate from Socket.IO's own CORS
 // handling below, since browsers enforce fetch()/XHR CORS independently of
@@ -53,6 +70,9 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => res.send('Hidden Queen Chess server is running.'));
 
 app.post('/api/signup', async (req, res) => {
+  if (!checkSignupRateByIp(req.ip)) {
+    return res.status(429).json({ ok: false, reason: 'rate_limited' });
+  }
   try {
     const result = await signup(req.body || {});
     if (!result.ok) return res.status(400).json(result);
@@ -64,6 +84,9 @@ app.post('/api/signup', async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
+  if (!checkLoginRateByIp(req.ip)) {
+    return res.status(429).json({ ok: false, reason: 'rate_limited' });
+  }
   try {
     const result = await login(req.body || {});
     if (!result.ok) return res.status(401).json(result);
@@ -376,6 +399,25 @@ io.on('connection', (socket) => {
   const authUser = verifyToken(socket.handshake.auth && socket.handshake.auth.token);
   if (authUser) socket.data.user = authUser;
 
+  // Socket-wide flood guard: no legitimate client — human or a bot playing
+  // at full speed with premoves — sends this many messages of ANY kind
+  // this fast. onAny() fires for every incoming event; disconnecting here
+  // stops the flood from continuing, even though a few more messages
+  // already in flight when the threshold was crossed may still reach
+  // their own handlers too (an acceptable edge case — the goal is
+  // bounding sustained abuse, not perfectly blocking the exact final
+  // message). The tripped flag stops a whole backlog of already-queued
+  // messages from each independently re-triggering disconnect() and a
+  // fresh log line before the connection actually closes.
+  socket.onAny(() => {
+    if (socket.data.rateLimitTripped) return;
+    if (!checkSocketMessageRate(socket.id)) {
+      socket.data.rateLimitTripped = true;
+      console.warn(`Disconnecting socket ${socket.id} for exceeding the message rate limit`);
+      socket.disconnect(true);
+    }
+  });
+
   socket.on('createChallenge', ({ timeControl, name }) => {
     const code = genChallengeCode();
     const displayName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
@@ -428,6 +470,10 @@ io.on('connection', (socket) => {
       socket.emit('queueRejected', { reason: 'login_required' });
       return;
     }
+    if (!checkQueueActionRate(socket.data.user.id)) {
+      socket.emit('queueRejected', { reason: 'rate_limited' });
+      return;
+    }
     if (socket.data.gameId || socket.data.queuedTimeControl) {
       socket.emit('queueRejected', { reason: 'already_queued_or_in_game' });
       return;
@@ -452,6 +498,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('cancelQueue', () => {
+    if (socket.data.user && !checkQueueActionRate(socket.data.user.id)) return; // silently ignore — the socket-wide flood guard also applies
     removeFromQueue(socket.id);
     socket.data.queuedTimeControl = null;
   });
