@@ -132,12 +132,25 @@
   let socket = null;
   let myColor = null;
   let gameId = null;
+  let resumeToken = null;
   let phase = 'idle'; // idle | awaiting_setup | in_progress | over
   let board = new Array(64).fill(null);
   let turn = 'w';
   let selectedSquare = null;
   let clocks = { white: null, black: null };
   let drawOfferPending = false;
+
+  // Survives a full page reload (not just a same-session network blip) —
+  // sessionStorage rather than localStorage since a resume token should
+  // only ever be reused within roughly the same browsing session, not
+  // rediscovered days later.
+  function saveResumeInfo() {
+    try { sessionStorage.setItem('hqc_resume', JSON.stringify({ gameId, resumeToken, serverUrl: $('serverUrl').value.trim() })); } catch { /* ignore */ }
+  }
+  function clearResumeInfo() {
+    resumeToken = null;
+    try { sessionStorage.removeItem('hqc_resume'); } catch { /* ignore */ }
+  }
 
   const $ = (id) => document.getElementById(id);
   const boardEl = $('board');
@@ -306,7 +319,13 @@
 
   $('btnConnect').addEventListener('click', () => {
     const url = $('serverUrl').value.trim();
-    socket = io(url, { transports: ['websocket'], auth: account ? { token: account.token } : {} });
+    // No `transports` override here on purpose — Socket.IO's default tries
+    // polling first and upgrades to WebSocket, so a network that blocks the
+    // WebSocket upgrade handshake (some hotel/school/corporate networks)
+    // still falls back to working long-polling instead of failing outright.
+    // Forcing ['websocket'] (like this used to) throws that fallback away.
+    socket = io(url, { auth: account ? { token: account.token } : {} });
+    window.__hqcSocket = socket; // debug/test hook only — this page is a scratch tool, not the real UI
 
     socket.onAny((event, payload) => log(`RECV ${event}: ${JSON.stringify(payload)}`));
 
@@ -315,15 +334,56 @@
       $('btnCreate').disabled = false;
       $('btnJoin').disabled = false;
       $('btnJoinQueue').disabled = !account;
+      // Covers a full page reload, not just a same-session network blip —
+      // 'reconnect' above only fires for the latter, since a reload loses
+      // all JS state including the gameId/resumeToken variables themselves.
+      if (!gameId) {
+        try {
+          const saved = JSON.parse(sessionStorage.getItem('hqc_resume') || 'null');
+          if (saved && saved.serverUrl === url) {
+            log('Found a saved game from before reload — attempting to resume...');
+            gameId = saved.gameId; resumeToken = saved.resumeToken;
+            socket.emit('resumeGame', { gameId, resumeToken });
+          }
+        } catch { /* ignore malformed/unavailable storage */ }
+      }
     });
     socket.on('disconnect', () => {
-      $('connStatus').textContent = 'Disconnected.';
+      $('connStatus').textContent = 'Disconnected — will try to reconnect automatically...';
       $('btnCreate').disabled = true;
       $('btnJoin').disabled = true;
       $('btnJoinQueue').disabled = true;
       $('btnCancelQueue').disabled = true;
     });
     socket.on('connect_error', (err) => { $('connStatus').textContent = 'Connect error: ' + err.message; });
+
+    // Socket.IO reconnects automatically with backoff by default (this is
+    // the "reconnect-with-backoff" the spec asks for — it's built into the
+    // client library, not something we hand-roll). This 'reconnect' event
+    // fires once that succeeds; the new socket has a new id, so the server
+    // has no idea it's the same player until we tell it via resumeGame.
+    socket.io.on('reconnect', () => {
+      $('connStatus').textContent = 'Reconnected.';
+      $('btnCreate').disabled = false;
+      $('btnJoin').disabled = false;
+      $('btnJoinQueue').disabled = !account;
+      if (gameId && resumeToken && phase !== 'over') {
+        log('Attempting to resume game after reconnect...');
+        socket.emit('resumeGame', { gameId, resumeToken });
+      }
+    });
+
+    socket.on('resumed', ({ yourColor, phase: p, state, clocks: c }) => {
+      myColor = yourColor; phase = p;
+      if (state) { board = state.board; turn = state.turn; }
+      clocks = c;
+      log('Game resumed successfully.');
+      renderBoard(); renderClocks(); updateTurnStatus(); setButtons();
+    });
+    socket.on('resumeFailed', ({ reason }) => {
+      log(`Resume failed: ${reason} — this game can no longer be rejoined.`);
+      clearResumeInfo();
+    });
 
     socket.on('challengeCreated', ({ code }) => {
       $('challengeCode').textContent = `Code: ${code} — send this to your opponent.`;
@@ -341,8 +401,10 @@
       $('queueStatus').textContent = `Queue rejected: ${reason}`;
     });
 
-    socket.on('matchFound', ({ gameId: gid, yourColor, opponentName, opponentRating, rated, timeControl }) => {
+    socket.on('matchFound', ({ gameId: gid, yourColor, opponentName, opponentRating, rated, timeControl, resumeToken: rt }) => {
       gameId = gid; myColor = yourColor; phase = 'awaiting_setup';
+      resumeToken = rt;
+      saveResumeInfo();
       board = initialBoardForSetupDisplay();
       $('queueStatus').textContent = '';
       $('btnJoinQueue').disabled = !account;
@@ -384,12 +446,13 @@
       if (byColor !== myColor) { drawOfferPending = true; setButtons(); log('Opponent offered a draw.'); }
     });
 
-    socket.on('opponentDisconnected', () => log('Opponent disconnected (no reconnect support yet in Phase 1).'));
+    socket.on('opponentDisconnected', ({ graceMs }) => log(`Opponent disconnected — game auto-forfeits in ${Math.round((graceMs || 0) / 1000)}s if they don't come back.`));
     socket.on('opponentReconnected', () => log('Opponent reconnected.'));
 
     socket.on('gameOver', ({ result, reason }) => {
       phase = 'over';
       $('turnStatus').textContent = `Game over: ${result} (${reason})`;
+      clearResumeInfo();
       setButtons();
     });
   });

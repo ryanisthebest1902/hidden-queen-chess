@@ -11,8 +11,11 @@
 // adds accounts (db.js/auth.js) and game-history persistence on top of it —
 // login is OPTIONAL, not required to play: an unauthenticated socket still
 // works exactly as in Phase 1, with a freeform display name and no history
-// saved. Still no matchmaking queue or rating (Phase 3), and no
-// reconnection/resumeToken support yet (Phase 4).
+// saved. Phase 3 adds ratings/matchmaking (ratings.js). Phase 4 adds
+// reconnection: a resumeToken per color per game, a disconnect grace period
+// before a game is forfeited, and — just as important — NOT restricting the
+// client to WebSocket-only, so a network that blocks the WebSocket upgrade
+// handshake can still fall back to long-polling (see online-beta.html).
 
 const http = require('http');
 const crypto = require('crypto');
@@ -31,6 +34,9 @@ const CHALLENGE_TTL_MS = 10 * 60 * 1000; // unaccepted challenges expire after 1
 const MATCH_INTERVAL_MS = 1000;
 const TOLERANCE_WIDEN_MS = 7500; // matchmaking rating tolerance widens this often while waiting (spec section 8)
 const TOLERANCE_MAX = 400;
+// Overridable by env var so the automated test can use a short grace
+// period instead of waiting 90 real seconds for a forfeiture to fire.
+const DISCONNECT_GRACE_MS = parseInt(process.env.DISCONNECT_GRACE_MS, 10) || 90000;
 
 const app = express();
 app.use(express.json());
@@ -238,6 +244,10 @@ function startClockSyncLoop(room) {
 function stopRoomTimers(room) {
   if (room.setupTimer) clearTimeout(room.setupTimer);
   if (room.clockInterval) clearInterval(room.clockInterval);
+  if (room.disconnectTimers.w) clearTimeout(room.disconnectTimers.w);
+  if (room.disconnectTimers.b) clearTimeout(room.disconnectTimers.b);
+  room.disconnectTimers.w = null;
+  room.disconnectTimers.b = null;
 }
 
 function endGame(room, result, reason) {
@@ -323,6 +333,7 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
   const whiteRating = aIsWhite ? aRating : bRating;
   const blackRating = aIsWhite ? bRating : aRating;
   const { baseMs, incMs } = parseTimeControl(timeControl);
+  const resumeTokens = { w: crypto.randomBytes(24).toString('hex'), b: crypto.randomBytes(24).toString('hex') };
 
   const room = {
     id: gameId,
@@ -330,6 +341,7 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
     sockets: { w: whiteSocket.id, b: blackSocket.id },
     names: { w: whiteName, b: blackName },
     userIds: { w: whiteUserId || null, b: blackUserId || null },
+    resumeTokens,
     rated,
     timeControl,
     baseMs,
@@ -341,6 +353,7 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
     setupSubmitted: { w: false, b: false },
     setupTimer: null,
     clockInterval: null,
+    disconnectTimers: { w: null, b: null },
     drawOfferBy: null,
   };
   rooms.set(gameId, room);
@@ -350,8 +363,8 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
   whiteSocket.join(`game:${gameId}`);
   blackSocket.join(`game:${gameId}`);
 
-  whiteSocket.emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl });
-  blackSocket.emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl });
+  whiteSocket.emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl, resumeToken: resumeTokens.w });
+  blackSocket.emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl, resumeToken: resumeTokens.b });
 
   room.setupTimer = setTimeout(() => finalizeSetupTimeout(room), SETUP_TIMEOUT_MS);
   return room;
@@ -547,17 +560,58 @@ io.on('connection', (socket) => {
     socket.emit('pong', { clientTime, serverTime: Date.now() });
   });
 
+  // A dropped connection presents as a brand-new socket with no socket.data
+  // yet, so this can't go through roomForSocket() (which relies on
+  // socket.data.gameId already being set) — look the room up directly by
+  // gameId, then confirm the token actually belongs to one of its colors.
+  socket.on('resumeGame', ({ gameId, resumeToken }) => {
+    const room = rooms.get(gameId);
+    if (!room || room.phase === 'over') {
+      socket.emit('resumeFailed', { reason: 'no_such_game' });
+      return;
+    }
+    const color = room.resumeTokens.w === resumeToken ? 'w' : room.resumeTokens.b === resumeToken ? 'b' : null;
+    if (!color) {
+      socket.emit('resumeFailed', { reason: 'invalid_token' });
+      return;
+    }
+    if (room.disconnectTimers[color]) {
+      clearTimeout(room.disconnectTimers[color]);
+      room.disconnectTimers[color] = null;
+    }
+    room.sockets[color] = socket.id;
+    socket.data.gameId = gameId;
+    socket.data.color = color;
+    if (socket.handshake.auth && socket.handshake.auth.token) {
+      const authUser = verifyToken(socket.handshake.auth.token);
+      if (authUser) socket.data.user = authUser;
+    }
+    socket.join(`game:${gameId}`);
+    socket.emit('resumed', {
+      gameId, yourColor: color, phase: room.phase,
+      state: sanitizedState(room, color), clocks: currentClocks(room), timeControl: room.timeControl,
+    });
+    io.to(room.sockets[otherColor(color)]).emit('opponentReconnected');
+  });
+
   socket.on('disconnect', () => {
     const code = socket.data.pendingChallengeCode;
     if (code) challenges.delete(code);
     removeFromQueue(socket.id);
     const room = roomForSocket(socket);
     if (!room || room.phase === 'over') return;
-    // Phase 1: no reconnection/grace period yet (that's Phase 4) — just let
-    // the opponent know. The game is left open rather than auto-forfeited,
-    // since there's no resume path yet for a genuine blip to recover into.
-    const opponentColor = otherColor(socket.data.color);
-    io.to(room.sockets[opponentColor]).emit('opponentDisconnected', { graceMs: null });
+    const color = socket.data.color;
+    const opponentColor = otherColor(color);
+    io.to(room.sockets[opponentColor]).emit('opponentDisconnected', { graceMs: DISCONNECT_GRACE_MS });
+    // If the SAME socket id reconnects and calls resumeGame before the
+    // timer fires, resumeGame clears it above. If room.sockets[color] has
+    // already moved on to a newer socket id by the time this fires (this
+    // was a stale/duplicate disconnect event), skip — the current holder
+    // of that color is still connected.
+    room.disconnectTimers[color] = setTimeout(() => {
+      if (room.phase === 'over' || room.sockets[color] !== socket.id) return;
+      endGame(room, resultForWinner(opponentColor), 'abandonment');
+    }, DISCONNECT_GRACE_MS);
   });
 });
 
