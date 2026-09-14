@@ -276,7 +276,7 @@
     if (phase === 'awaiting_setup') {
       const p = board[idx];
       if (!p || p.color !== myColor || p.type === 'K') return;
-      socket.emit('submitHiddenQueen', { square: algebraic(idx) });
+      socket.emit('submitHiddenQueen', { gameId, square: algebraic(idx) });
       log(`You submitted ${algebraic(idx)} as your hidden queen.`);
       return;
     }
@@ -294,7 +294,7 @@
     if (movingPiece && movingPiece.type === 'P' && (Math.floor(idx / 8) === 0 || Math.floor(idx / 8) === 7)) {
       promotion = prompt('Promote to (Q/R/B/N)?', 'Q');
     }
-    socket.emit('makeMove', { from, to, promotion, clientMoveId: `${from}-${to}-${Date.now()}` });
+    socket.emit('makeMove', { gameId, from, to, promotion, clientMoveId: `${from}-${to}-${Date.now()}` });
     selectedSquare = null;
     renderBoard();
   }
@@ -464,9 +464,9 @@
     const code = $('joinCode').value.trim().toUpperCase();
     socket.emit('acceptChallenge', { code, name: account ? undefined : $('name').value });
   });
-  $('btnResign').addEventListener('click', () => { if (confirm('Resign?')) socket.emit('resign'); });
-  $('btnOfferDraw').addEventListener('click', () => socket.emit('offerDraw'));
-  $('btnAcceptDraw').addEventListener('click', () => { socket.emit('respondDraw', { accept: true }); drawOfferPending = false; setButtons(); });
+  $('btnResign').addEventListener('click', () => { if (confirm('Resign?')) socket.emit('resign', { gameId }); });
+  $('btnOfferDraw').addEventListener('click', () => socket.emit('offerDraw', { gameId }));
+  $('btnAcceptDraw').addEventListener('click', () => { socket.emit('respondDraw', { gameId, accept: true }); drawOfferPending = false; setButtons(); });
 
   $('btnJoinQueue').addEventListener('click', () => {
     if (!account) { log('Log in first — matchmaking requires an account.'); return; }

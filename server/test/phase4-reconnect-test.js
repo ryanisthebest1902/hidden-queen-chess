@@ -53,8 +53,8 @@ async function main() {
     const gameId = aliceMatch.gameId;
     const aliceToken = aliceMatch.resumeToken;
 
-    alice.emit('submitHiddenQueen', { square: aliceMatch.yourColor === 'w' ? 'b1' : 'b8' });
-    bob.emit('submitHiddenQueen', { square: bobMatch.yourColor === 'w' ? 'b1' : 'b8' });
+    alice.emit('submitHiddenQueen', { gameId, square: aliceMatch.yourColor === 'w' ? 'b1' : 'b8' });
+    bob.emit('submitHiddenQueen', { gameId, square: bobMatch.yourColor === 'w' ? 'b1' : 'b8' });
     await Promise.all([waitForEvent(alice, 'gameStart'), waitForEvent(bob, 'gameStart')]);
 
     const bobSeesDisconnect = waitForEvent(bob, 'opponentDisconnected');
@@ -84,7 +84,7 @@ async function main() {
     const fromSq = turnColor === 'w' ? 'a2' : 'a7';
     const toSq = turnColor === 'w' ? 'a4' : 'a5';
     const bothGetMove = Promise.all([waitForEvent(aliceNew, 'moveApplied'), waitForEvent(bob, 'moveApplied')]);
-    mover.emit('makeMove', { from: fromSq, to: toSq, clientMoveId: 'resume-move' });
+    mover.emit('makeMove', { gameId, from: fromSq, to: toSq, clientMoveId: 'resume-move' });
     await bothGetMove;
     assert(true, 'a move after resuming is processed normally (no exception thrown, both sides got moveApplied)');
 
@@ -106,8 +106,9 @@ async function main() {
     const { code: code2 } = await waitForEvent(alice2, 'challengeCreated');
     bob2.emit('acceptChallenge', { code: code2, name: 'Bob2' });
     const [alice2Match, bob2Match] = await Promise.all([waitForEvent(alice2, 'matchFound'), waitForEvent(bob2, 'matchFound')]);
-    alice2.emit('submitHiddenQueen', { square: alice2Match.yourColor === 'w' ? 'b1' : 'b8' });
-    bob2.emit('submitHiddenQueen', { square: bob2Match.yourColor === 'w' ? 'b1' : 'b8' });
+    const gameId2 = alice2Match.gameId;
+    alice2.emit('submitHiddenQueen', { gameId: gameId2, square: alice2Match.yourColor === 'w' ? 'b1' : 'b8' });
+    bob2.emit('submitHiddenQueen', { gameId: gameId2, square: bob2Match.yourColor === 'w' ? 'b1' : 'b8' });
     await Promise.all([waitForEvent(alice2, 'gameStart'), waitForEvent(bob2, 'gameStart')]);
 
     const bob2SeesGameOver = waitForEvent(bob2, 'gameOver', GRACE_MS + 3000);

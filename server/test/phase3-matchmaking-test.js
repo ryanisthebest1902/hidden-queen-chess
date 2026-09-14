@@ -71,17 +71,18 @@ async function main() {
     assert(aliceMatch.rated === true && bobMatch.rated === true, 'matchmaking games are flagged rated:true');
     assert(aliceMatch.opponentRating === 1500 && bobMatch.opponentRating === 1500, 'both fresh accounts start at the default 1500 rating');
 
+    const gameId = aliceMatch.gameId;
     const white = aliceMatch.yourColor === 'w' ? alice : bob;
     const black = aliceMatch.yourColor === 'b' ? alice : bob;
-    white.emit('submitHiddenQueen', { square: 'b1' });
-    black.emit('submitHiddenQueen', { square: 'b8' });
+    white.emit('submitHiddenQueen', { gameId, square: 'b1' });
+    black.emit('submitHiddenQueen', { gameId, square: 'b8' });
     await Promise.all([waitForEvent(white, 'gameStart'), waitForEvent(black, 'gameStart')]);
 
     const [whiteOver, blackOver, whiteRatingMsg, blackRatingMsg] = [
       waitForEvent(white, 'gameOver'), waitForEvent(black, 'gameOver'),
       waitForEvent(white, 'ratingUpdate'), waitForEvent(black, 'ratingUpdate'),
     ];
-    black.emit('resign'); // white wins
+    black.emit('resign', { gameId }); // white wins
     await Promise.all([whiteOver, blackOver]);
     const [whiteRating, blackRating] = await Promise.all([whiteRatingMsg, blackRatingMsg]);
     assert(whiteRating.after > whiteRating.before, 'the winner\'s rating went up');

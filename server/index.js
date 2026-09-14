@@ -1,39 +1,54 @@
-// Hidden Queen Chess — Phase 1+2 multiplayer server.
+// Hidden Queen Chess — Phase 1-6 multiplayer server.
 //
-// Server-authoritative: this process holds the only true Engine per game.
-// Every outbound board-state payload goes through engine.getPublicView
+// Server-authoritative: the true game state lives in Redis (Phase 6), not
+// in any one process's memory — any instance can handle any player's
+// message by reading fresh state, mutating it, and writing it back. Every
+// outbound board-state payload goes through engine.getPublicView
 // (already built into engine.js) before being sent, and that call is made
-// separately per socket — never build one state object and reuse it for
+// separately per color — never build one state object and reuse it for
 // both players. See section 1 of the build spec: this is the one rule that
-// matters more than anything else here.
+// matters more than anything else here, and it holds regardless of how
+// many server instances are running.
 //
-// Phase 1 scope (direct-challenge links, live play) is unchanged. Phase 2
-// adds accounts (db.js/auth.js) and game-history persistence on top of it —
-// login is OPTIONAL, not required to play: an unauthenticated socket still
-// works exactly as in Phase 1, with a freeform display name and no history
-// saved. Phase 3 adds ratings/matchmaking (ratings.js). Phase 4 adds
-// reconnection: a resumeToken per color per game, a disconnect grace period
-// before a game is forfeited, and — just as important — NOT restricting the
-// client to WebSocket-only, so a network that blocks the WebSocket upgrade
-// handshake can still fall back to long-polling (see online-beta.html).
-// Phase 5 adds abuse hardening (rateLimit.js): per-socket message-flood
-// protection, per-IP signup/login throttling, and per-account matchmaking
-// queue-spam throttling.
+// Phase 1 scope (direct-challenge links, live play). Phase 2 adds accounts
+// (db.js/auth.js) and game-history persistence — login is OPTIONAL, not
+// required to play. Phase 3 adds ratings/matchmaking (ratings.js). Phase 4
+// adds reconnection (a resumeToken per color per game, a disconnect grace
+// period) and drops the client's WebSocket-only restriction so Socket.IO's
+// long-polling fallback actually works. Phase 5 adds abuse hardening
+// (rateLimit.js). Phase 6 (cluster.js) moves everything — challenges, the
+// matchmaking queue, and every active game's state — into Redis, so this
+// server can run as more than one instance and still work correctly when
+// two matched players end up connected to different instances.
+//
+// Honest simplification carried over from Phase 6 (see cluster.js's own
+// header comment): room reads/writes are plain GET-then-SET, not
+// optimistic-locked. Fine for a turn-based 2-player hobby game; the
+// matchmaking queue's pairing claim, where a real double-match would be a
+// much worse bug, DOES use an atomic Lua script instead.
 
 const http = require('http');
 const crypto = require('crypto');
 const express = require('express');
 const { Server } = require('socket.io');
-const { Engine, sq, rankOf, fileOf, algebraic, otherColor } = require('../engine.js');
+const { Engine, sq, algebraic, otherColor, serializeEngine, deserializeEngine } = require('../engine.js');
 const { pool, initSchema } = require('./db.js');
 const { signup, login, verifyToken } = require('./auth.js');
 const { timeClassOf, applyGameResult, getRatingsForUser, getLeaderboard } = require('./ratings.js');
 const { createRateLimiter } = require('./rateLimit.js');
+const cluster = require('./cluster.js');
+const {
+  INSTANCE_ID, attachRedisAdapter,
+  saveChallenge, getChallenge, deleteChallenge,
+  enqueuePlayer, dequeuePlayerBySocketId, listQueueEntries, listActiveTimeControls, claimPair,
+  saveRoom, loadRoom, deleteRoom, updateRoom, NO_CHANGE,
+  setBusy, getBusy, clearBusy,
+} = cluster;
 
 const PORT = process.env.PORT || 8080;
 const SETUP_TIMEOUT_MS = 30000;
 const LAG_GRACE_MS = 1500; // small, symmetric clock grace for message transit time (spec section 2/10)
-const CLOCK_SYNC_INTERVAL_MS = 1500;
+const HOUSEKEEPING_INTERVAL_MS = 1000; // drives clock-sync broadcasts + setup-timeout + disconnect-grace checks
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // unaccepted challenges expire after 10 min
 const MATCH_INTERVAL_MS = 1000;
 const TOLERANCE_WIDEN_MS = 7500; // matchmaking rating tolerance widens this often while waiting (spec section 8)
@@ -67,7 +82,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.get('/', (req, res) => res.send('Hidden Queen Chess server is running.'));
+app.get('/', (req, res) => res.send(`Hidden Queen Chess server is running (instance ${INSTANCE_ID.slice(0, 8)}).`));
 
 app.post('/api/signup', async (req, res) => {
   if (!checkSignupRateByIp(req.ip)) {
@@ -151,13 +166,14 @@ const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: '*' },
 });
+attachRedisAdapter(io);
 
-/** @type {Map<string, {code:string, creatorSocketId:string, creatorName:string, timeControl:string, createdAt:number}>} */
-const challenges = new Map();
-/** @type {Map<string, GameRoom>} */
-const rooms = new Map();
-/** @type {Map<string, Array<{socketId:string, userId:string, displayName:string, rating:number, timeControl:string, joinedAt:number}>>} */
-const queuesByTimeControl = new Map();
+// Per-room setInterval handles this SPECIFIC instance is currently running
+// — NOT shared state (that's all in Redis). Whichever instance creates a
+// room takes on responsibility for its housekeeping (clock-sync broadcasts,
+// setup-timeout, disconnect-grace checks) for that room's lifetime.
+/** @type {Map<string, NodeJS.Timeout>} */
+const localHousekeeping = new Map();
 
 function fromAlgebraic(str) {
   const file = str.charCodeAt(0) - 97;
@@ -172,75 +188,29 @@ function parseTimeControl(tc) {
   return { baseMs: parseInt(m[1], 10) * 60 * 1000, incMs: parseInt(m[2], 10) * 1000 };
 }
 
-function genChallengeCode() {
+async function generateUniqueChallengeCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I ambiguity
   let code;
   do {
     code = Array.from({ length: 5 }, () => alphabet[crypto.randomInt(alphabet.length)]).join('');
-  } while (challenges.has(code));
+  } while (await cluster.challengeCodeExists(code));
   return code;
 }
 
-function roomForSocket(socket) {
-  const gameId = socket.data.gameId;
-  return gameId ? rooms.get(gameId) : null;
-}
-
-function removeFromQueue(socketId) {
-  for (const list of queuesByTimeControl.values()) {
-    const idx = list.findIndex((e) => e.socketId === socketId);
-    if (idx !== -1) list.splice(idx, 1);
-  }
-}
-
-// Runs every MATCH_INTERVAL_MS. Within each timeControl bucket, pairs the
-// oldest-waiting entries first and widens the acceptable rating gap the
-// longer a pair has been waiting (spec section 8) — a simple, un-thin-queue
-// -aware version (no separate "is the queue thin right now" signal yet;
-// TOLERANCE_WIDEN_MS alone already gets a lone player matched within a
-// couple of minutes even in a small queue).
-function runMatchmakingTick() {
-  for (const [tc, list] of queuesByTimeControl.entries()) {
-    list.sort((a, b) => a.joinedAt - b.joinedAt);
-    const matched = new Set();
-    for (let i = 0; i < list.length; i++) {
-      if (matched.has(i)) continue;
-      for (let j = i + 1; j < list.length; j++) {
-        if (matched.has(j)) continue;
-        const a = list[i], b = list[j];
-        const waited = Date.now() - Math.min(a.joinedAt, b.joinedAt);
-        const tolerance = Math.min(50 + 25 * Math.floor(waited / TOLERANCE_WIDEN_MS), TOLERANCE_MAX);
-        if (Math.abs(a.rating - b.rating) <= tolerance) {
-          matched.add(i); matched.add(j);
-          const socketA = io.sockets.sockets.get(a.socketId);
-          const socketB = io.sockets.sockets.get(b.socketId);
-          if (socketA && socketB) {
-            createGameRoom(socketA, a.displayName, a.userId, socketB, b.displayName, b.userId, tc, true, Math.round(a.rating), Math.round(b.rating));
-          }
-          if (socketA) socketA.data.queuedTimeControl = null;
-          if (socketB) socketB.data.queuedTimeControl = null;
-          break;
-        }
-      }
-    }
-    if (matched.size > 0) {
-      queuesByTimeControl.set(tc, list.filter((_, idx) => !matched.has(idx)));
-    }
-  }
-}
-setInterval(runMatchmakingTick, MATCH_INTERVAL_MS);
-
-function sanitizedState(room, viewerColor) {
-  return {
-    board: room.engine.getPublicView(viewerColor),
-    turn: room.engine.turn,
-  };
+// Which color does this socket currently hold in this room? Derived from
+// the room's own stored socket ids rather than trusting local socket.data,
+// since a match can be created by a completely different instance than the
+// one either player's socket is actually connected to.
+function colorForSocket(room, socketId) {
+  if (room.sockets.w === socketId) return 'w';
+  if (room.sockets.b === socketId) return 'b';
+  return null;
 }
 
 function currentClocks(room) {
   const clocks = { white: room.msRemaining.w, black: room.msRemaining.b };
   if (room.phase === 'in_progress' && room.turnStartedAtServerTs != null) {
-    const sideToMove = room.engine.turn;
+    const sideToMove = room.engineData.turn;
     const elapsed = Date.now() - room.turnStartedAtServerTs;
     const key = sideToMove === 'w' ? 'white' : 'black';
     clocks[key] = Math.max(0, clocks[key] - elapsed);
@@ -248,39 +218,72 @@ function currentClocks(room) {
   return clocks;
 }
 
-function sendGameStart(room) {
+function resultForWinner(winnerColor) {
+  return winnerColor === 'w' ? 'white' : 'black';
+}
+
+async function sendGameStart(room) {
+  const engine = deserializeEngine(room.engineData);
+  const clocks = currentClocks(room);
   for (const color of ['w', 'b']) {
     io.to(room.sockets[color]).emit('gameStart', {
-      state: sanitizedState(room, color),
-      clocks: currentClocks(room),
+      state: { board: engine.getPublicView(color), turn: engine.turn },
+      clocks,
     });
   }
 }
 
-function startClockSyncLoop(room) {
-  room.clockInterval = setInterval(() => {
-    if (room.phase !== 'in_progress') return;
-    io.to(`game:${room.id}`).emit('clockSync', { ...currentClocks(room), serverTime: Date.now() });
-  }, CLOCK_SYNC_INTERVAL_MS);
+// Every one of these takes a gameId and reloads fresh state itself via
+// updateRoom's CAS retry loop — never a pre-loaded room object — so a
+// caller can never accidentally act on state another instance has since
+// changed. See cluster.js's header comment on updateRoom for why this
+// matters more than it might look like it should.
+
+async function maybeBeginPlay(gameId) {
+  const outcome = await updateRoom(gameId, (room) => {
+    if (room.phase !== 'awaiting_setup') return { started: false };
+    if (!room.setupSubmitted.w || !room.setupSubmitted.b) return { started: false };
+    const engine = deserializeEngine(room.engineData);
+    engine.maybeStartGame();
+    room.engineData = serializeEngine(engine);
+    room.phase = 'in_progress';
+    room.turnStartedAtServerTs = Date.now();
+    return { started: true };
+  });
+  if (outcome && outcome.result.started) await sendGameStart(outcome.room);
 }
 
-function stopRoomTimers(room) {
-  if (room.setupTimer) clearTimeout(room.setupTimer);
-  if (room.clockInterval) clearInterval(room.clockInterval);
-  if (room.disconnectTimers.w) clearTimeout(room.disconnectTimers.w);
-  if (room.disconnectTimers.b) clearTimeout(room.disconnectTimers.b);
-  room.disconnectTimers.w = null;
-  room.disconnectTimers.b = null;
+async function finalizeSetupTimeout(gameId) {
+  await updateRoom(gameId, (room) => {
+    if (room.phase !== 'awaiting_setup') return;
+    const engine = deserializeEngine(room.engineData);
+    for (const color of ['w', 'b']) {
+      if (!room.setupSubmitted[color]) {
+        engine.pickRandomHiddenQueenFor(color);
+        room.setupSubmitted[color] = true;
+      }
+    }
+    room.engineData = serializeEngine(engine);
+  });
+  await maybeBeginPlay(gameId);
 }
 
-function endGame(room, result, reason) {
-  if (room.phase === 'over') return;
-  room.phase = 'over';
-  stopRoomTimers(room);
-  io.to(`game:${room.id}`).emit('gameOver', { result, reason });
+async function endGame(gameId, result, reason) {
+  const outcome = await updateRoom(gameId, (room) => {
+    if (room.phase === 'over') return { alreadyOver: true };
+    room.phase = 'over';
+    return { alreadyOver: false };
+  });
+  if (!outcome || outcome.result.alreadyOver) return;
+  const room = outcome.room; // updateRoom() hands back the same (now-saved) room object the mutator changed
+  io.to(room.sockets.w).emit('gameOver', { result, reason });
+  io.to(room.sockets.b).emit('gameOver', { result, reason });
+  await clearBusy(room.sockets.w).catch(() => {});
+  await clearBusy(room.sockets.b).catch(() => {});
   persistCompletedGame(room, result, reason); // best-effort — never blocks the live game flow
-  // Phase 1 has no rematch yet — free the room shortly after.
-  setTimeout(() => rooms.delete(room.id), 60000);
+  // No rematch yet — free the room shortly after (both the Redis copy and
+  // this instance's local housekeeping interval for it).
+  setTimeout(() => { deleteRoom(gameId).catch(() => {}); }, 60000);
 }
 
 async function persistCompletedGame(room, result, reason) {
@@ -317,38 +320,71 @@ async function persistCompletedGame(room, result, reason) {
   }
 }
 
-function resultForWinner(winnerColor) {
-  return winnerColor === 'w' ? 'white' : 'black';
-}
+// One interval per room, run by whichever instance created it. Every tick
+// re-reads the room fresh from Redis (never trusts a stale local copy,
+// since the other player's actions may have been handled by a different
+// instance entirely) and: broadcasts clock state, forfeits on an expired
+// disconnect grace period, or auto-assigns hidden queens on an expired
+// setup deadline. Idempotent by construction — every action checks phase
+// first, so a redundant tick (or, in principle, one running on more than
+// one instance for the same room) is always a safe no-op.
+function startHousekeeping(gameId) {
+  if (localHousekeeping.has(gameId)) return;
+  const handle = setInterval(async () => {
+    try {
+      const room = await loadRoom(gameId);
+      if (!room || room.phase === 'over') { stopHousekeeping(gameId); return; }
+      const now = Date.now();
 
-function maybeBeginPlay(room) {
-  if (room.phase !== 'awaiting_setup') return;
-  if (!room.setupSubmitted.w || !room.setupSubmitted.b) return;
-  clearTimeout(room.setupTimer);
-  room.engine.maybeStartGame();
-  room.phase = 'in_progress';
-  room.turnStartedAtServerTs = Date.now();
-  sendGameStart(room);
-  startClockSyncLoop(room);
-}
+      if (room.phase === 'awaiting_setup') {
+        if (room.setupDeadlineAt && now >= room.setupDeadlineAt) await finalizeSetupTimeout(gameId);
+        return;
+      }
 
-function finalizeSetupTimeout(room) {
-  if (room.phase !== 'awaiting_setup') return;
-  for (const color of ['w', 'b']) {
-    if (!room.setupSubmitted[color]) {
-      room.engine.pickRandomHiddenQueenFor(color);
-      room.setupSubmitted[color] = true;
+      if (room.phase === 'in_progress') {
+        for (const color of ['w', 'b']) {
+          if (room.disconnectDeadline[color] && now >= room.disconnectDeadline[color]) {
+            await endGame(gameId, resultForWinner(otherColor(color)), 'abandonment');
+            return;
+          }
+        }
+        const clocks = currentClocks(room);
+        io.to(room.sockets.w).emit('clockSync', { ...clocks, serverTime: now });
+        io.to(room.sockets.b).emit('clockSync', { ...clocks, serverTime: now });
+      }
+    } catch (err) {
+      console.error(`housekeeping tick failed for game ${gameId}`, err);
     }
-  }
-  maybeBeginPlay(room);
+  }, HOUSEKEEPING_INTERVAL_MS);
+  localHousekeeping.set(gameId, handle);
 }
 
-function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeControl, rated = false, aRating = null, bRating = null) {
+function stopHousekeeping(gameId) {
+  const handle = localHousekeeping.get(gameId);
+  if (handle) { clearInterval(handle); localHousekeeping.delete(gameId); }
+}
+
+// Belt-and-suspenders: if a matched/resumed socket happens to be connected
+// to THIS instance, set its local socket.data directly right away (cheap,
+// and makes disconnect-lookup work immediately). If it's connected to a
+// different instance, this is a harmless no-op — that socket's own home
+// instance will set the same fields itself the moment it handles that
+// socket's first room-scoped message (every handler below does this).
+function tagLocalSocketIfPresent(socketId, gameId, color) {
+  const localSocket = io.sockets.sockets.get(socketId);
+  if (localSocket) {
+    localSocket.data.gameId = gameId;
+    localSocket.data.color = color;
+    localSocket.data.queuedTimeControl = null;
+  }
+}
+
+async function createGameRoom(aSocketId, aName, aUserId, bSocketId, bName, bUserId, timeControl, rated = false, aRating = null, bRating = null) {
   const gameId = crypto.randomUUID();
   const engine = new Engine();
   const aIsWhite = Math.random() < 0.5;
-  const whiteSocket = aIsWhite ? aSocket : bSocket;
-  const blackSocket = aIsWhite ? bSocket : aSocket;
+  const whiteSocketId = aIsWhite ? aSocketId : bSocketId;
+  const blackSocketId = aIsWhite ? bSocketId : aSocketId;
   const whiteName = aIsWhite ? aName : bName;
   const blackName = aIsWhite ? bName : aName;
   const whiteUserId = aIsWhite ? aUserId : bUserId;
@@ -360,8 +396,8 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
 
   const room = {
     id: gameId,
-    engine,
-    sockets: { w: whiteSocket.id, b: blackSocket.id },
+    engineData: serializeEngine(engine),
+    sockets: { w: whiteSocketId, b: blackSocketId },
     names: { w: whiteName, b: blackName },
     userIds: { w: whiteUserId || null, b: blackUserId || null },
     resumeTokens,
@@ -371,27 +407,61 @@ function createGameRoom(aSocket, aName, aUserId, bSocket, bName, bUserId, timeCo
     incMs,
     msRemaining: { w: baseMs, b: baseMs },
     turnStartedAtServerTs: null,
-    startedAt: new Date(),
+    startedAt: new Date().toISOString(),
     phase: 'awaiting_setup',
     setupSubmitted: { w: false, b: false },
-    setupTimer: null,
-    clockInterval: null,
-    disconnectTimers: { w: null, b: null },
+    setupDeadlineAt: Date.now() + SETUP_TIMEOUT_MS,
+    disconnectDeadline: { w: null, b: null },
     drawOfferBy: null,
+    createdByInstanceId: INSTANCE_ID,
   };
-  rooms.set(gameId, room);
+  await saveRoom(gameId, room);
+  await setBusy(whiteSocketId, { status: 'in_game', gameId });
+  await setBusy(blackSocketId, { status: 'in_game', gameId });
+  startHousekeeping(gameId);
 
-  whiteSocket.data.gameId = gameId; whiteSocket.data.color = 'w';
-  blackSocket.data.gameId = gameId; blackSocket.data.color = 'b';
-  whiteSocket.join(`game:${gameId}`);
-  blackSocket.join(`game:${gameId}`);
+  tagLocalSocketIfPresent(whiteSocketId, gameId, 'w');
+  tagLocalSocketIfPresent(blackSocketId, gameId, 'b');
 
-  whiteSocket.emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl, resumeToken: resumeTokens.w });
-  blackSocket.emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl, resumeToken: resumeTokens.b });
+  io.to(whiteSocketId).emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl, resumeToken: resumeTokens.w });
+  io.to(blackSocketId).emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl, resumeToken: resumeTokens.b });
 
-  room.setupTimer = setTimeout(() => finalizeSetupTimeout(room), SETUP_TIMEOUT_MS);
   return room;
 }
+
+// Runs on EVERY instance, every MATCH_INTERVAL_MS, against the ONE shared
+// Redis queue — claimPair()'s atomic Lua script is what stops two
+// instances from both matching the same pair at once (spec section 8).
+async function runMatchmakingTick() {
+  const timeControls = await listActiveTimeControls();
+  for (const tc of timeControls) {
+    const entries = await listQueueEntries(tc);
+    entries.sort((a, b) => a.entry.joinedAt - b.entry.joinedAt);
+    const claimed = new Set();
+    for (let i = 0; i < entries.length; i++) {
+      if (claimed.has(i)) continue;
+      for (let j = i + 1; j < entries.length; j++) {
+        if (claimed.has(j)) continue;
+        const a = entries[i].entry, b = entries[j].entry;
+        const waited = Date.now() - Math.min(a.joinedAt, b.joinedAt);
+        const tolerance = Math.min(50 + 25 * Math.floor(waited / TOLERANCE_WIDEN_MS), TOLERANCE_MAX);
+        if (Math.abs(a.rating - b.rating) <= tolerance) {
+          const won = await claimPair(tc, entries[i].raw, entries[j].raw);
+          if (won) {
+            claimed.add(i); claimed.add(j);
+            try {
+              await createGameRoom(a.socketId, a.displayName, a.userId, b.socketId, b.displayName, b.userId, tc, true, Math.round(a.rating), Math.round(b.rating));
+            } catch (err) {
+              console.error('failed to create matched game room', err);
+            }
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+setInterval(() => { runMatchmakingTick().catch((err) => console.error('matchmaking tick error', err)); }, MATCH_INTERVAL_MS);
 
 io.on('connection', (socket) => {
   // Login is optional — an authenticated socket gets its account's name/id
@@ -418,48 +488,47 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('createChallenge', ({ timeControl, name }) => {
-    const code = genChallengeCode();
+  socket.on('createChallenge', async ({ timeControl, name }) => {
+    const code = await generateUniqueChallengeCode();
     const displayName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
-    challenges.set(code, {
+    await saveChallenge(code, {
       code,
       creatorSocketId: socket.id,
+      creatorInstanceId: INSTANCE_ID,
       creatorName: displayName,
       creatorUserId: socket.data.user ? socket.data.user.id : null,
       timeControl: timeControl || '10+0',
       createdAt: Date.now(),
-    });
+    }, CHALLENGE_TTL_MS);
     socket.data.pendingChallengeCode = code;
     socket.emit('challengeCreated', { code, timeControl: timeControl || '10+0' });
   });
 
-  socket.on('cancelChallenge', () => {
+  socket.on('cancelChallenge', async () => {
     const code = socket.data.pendingChallengeCode;
-    if (code) challenges.delete(code);
+    if (code) await deleteChallenge(code);
   });
 
-  socket.on('acceptChallenge', ({ code, name }) => {
+  socket.on('acceptChallenge', async ({ code, name }) => {
     const upperCode = String(code || '').toUpperCase().trim();
-    const challenge = challenges.get(upperCode);
+    const challenge = await getChallenge(upperCode);
     if (!challenge) {
-      socket.emit('challengeInvalid', { code: upperCode });
+      socket.emit('challengeInvalid', { code: upperCode }); // Redis's own TTL already covers expiry — a missing key just looks like "not found"
       return;
     }
-    if (Date.now() - challenge.createdAt > CHALLENGE_TTL_MS) {
-      challenges.delete(upperCode);
-      socket.emit('challengeInvalid', { code: upperCode, reason: 'expired' });
-      return;
-    }
-    const creatorSocket = io.sockets.sockets.get(challenge.creatorSocketId);
-    if (!creatorSocket || !creatorSocket.connected) {
-      challenges.delete(upperCode);
+    // fetchSockets() works across instances via the adapter — this is the
+    // multi-instance-safe way to check "does this socket still exist
+    // anywhere in the cluster," not just locally.
+    const stillConnected = (await io.in(challenge.creatorSocketId).fetchSockets()).length > 0;
+    if (!stillConnected) {
+      await deleteChallenge(upperCode);
       socket.emit('challengeInvalid', { code: upperCode, reason: 'creator_gone' });
       return;
     }
-    challenges.delete(upperCode);
+    await deleteChallenge(upperCode);
     const accepterName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
     const accepterUserId = socket.data.user ? socket.data.user.id : null;
-    createGameRoom(creatorSocket, challenge.creatorName, challenge.creatorUserId, socket, accepterName, accepterUserId, challenge.timeControl);
+    await createGameRoom(challenge.creatorSocketId, challenge.creatorName, challenge.creatorUserId, socket.id, accepterName, accepterUserId, challenge.timeControl);
   });
 
   socket.on('joinQueue', async ({ timeControl }) => {
@@ -474,7 +543,8 @@ io.on('connection', (socket) => {
       socket.emit('queueRejected', { reason: 'rate_limited' });
       return;
     }
-    if (socket.data.gameId || socket.data.queuedTimeControl) {
+    const busy = await getBusy(socket.id);
+    if (busy || socket.data.queuedTimeControl) {
       socket.emit('queueRejected', { reason: 'already_queued_or_in_game' });
       return;
     }
@@ -488,82 +558,106 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('failed to look up rating for matchmaking', err);
     }
-    if (!queuesByTimeControl.has(tc)) queuesByTimeControl.set(tc, []);
-    queuesByTimeControl.get(tc).push({
-      socketId: socket.id, userId: socket.data.user.id, displayName: socket.data.user.displayName,
+    await enqueuePlayer(tc, {
+      socketId: socket.id, instanceId: INSTANCE_ID, userId: socket.data.user.id, displayName: socket.data.user.displayName,
       rating, timeControl: tc, joinedAt: Date.now(),
     });
+    await setBusy(socket.id, { status: 'queued', timeControl: tc });
     socket.data.queuedTimeControl = tc;
     socket.emit('queueJoined', { timeControl: tc });
   });
 
-  socket.on('cancelQueue', () => {
+  socket.on('cancelQueue', async () => {
     if (socket.data.user && !checkQueueActionRate(socket.data.user.id)) return; // silently ignore — the socket-wide flood guard also applies
-    removeFromQueue(socket.id);
+    await dequeuePlayerBySocketId(socket.id);
+    await clearBusy(socket.id).catch(() => {});
     socket.data.queuedTimeControl = null;
   });
 
-  socket.on('submitHiddenQueen', ({ square }) => {
-    const room = roomForSocket(socket);
-    if (!room || room.phase !== 'awaiting_setup') return;
-    const color = socket.data.color;
-    if (room.setupSubmitted[color]) return;
-    let idx;
-    try { idx = fromAlgebraic(square); } catch { return; }
-    const piece = room.engine.pieceAt(idx);
-    if (!piece || piece.color !== color) return;
-    const ok = room.engine.designateHiddenQueen(color, piece.id);
-    if (!ok) return;
-    room.setupSubmitted[color] = true;
-    maybeBeginPlay(room);
+  socket.on('submitHiddenQueen', async ({ gameId, square }) => {
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase !== 'awaiting_setup') return { [NO_CHANGE]: true };
+      const color = colorForSocket(room, socket.id);
+      if (!color) return { [NO_CHANGE]: true };
+      socket.data.gameId = gameId; socket.data.color = color; // cache for this socket's own instance (disconnect lookup)
+      if (room.setupSubmitted[color]) return { [NO_CHANGE]: true };
+      let idx;
+      try { idx = fromAlgebraic(square); } catch { return { [NO_CHANGE]: true }; }
+      const engine = deserializeEngine(room.engineData);
+      const piece = engine.pieceAt(idx);
+      if (!piece || piece.color !== color) return { [NO_CHANGE]: true };
+      const ok = engine.designateHiddenQueen(color, piece.id);
+      if (!ok) return { [NO_CHANGE]: true };
+      room.engineData = serializeEngine(engine);
+      room.setupSubmitted[color] = true;
+      return { [NO_CHANGE]: false };
+    });
+    if (outcome && outcome.saved) await maybeBeginPlay(gameId);
   });
 
-  socket.on('makeMove', ({ from, to, promotion, clientMoveId }) => {
-    const room = roomForSocket(socket);
-    if (!room || room.phase !== 'in_progress') return;
-    const color = socket.data.color;
-    if (room.engine.turn !== color) {
-      socket.emit('moveRejected', { clientMoveId, reason: 'not_your_turn', state: sanitizedState(room, color) });
-      return;
-    }
+  socket.on('makeMove', async ({ gameId, from, to, promotion, clientMoveId }) => {
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase !== 'in_progress') return { [NO_CHANGE]: true };
+      const color = colorForSocket(room, socket.id);
+      if (!color) return { [NO_CHANGE]: true };
+      socket.data.gameId = gameId; socket.data.color = color;
 
-    const now = Date.now();
-    const elapsed = now - room.turnStartedAtServerTs;
-    const overrun = elapsed - room.msRemaining[color];
-    if (overrun > 0) {
-      if (overrun <= LAG_GRACE_MS) {
-        room.msRemaining[color] = 0; // decided in time, just arrived a little late
-      } else {
-        const winner = otherColor(color);
-        endGame(room, resultForWinner(winner), 'timeout');
-        return;
+      const engine = deserializeEngine(room.engineData);
+      if (engine.turn !== color) {
+        return { [NO_CHANGE]: true, reject: { reason: 'not_your_turn', board: engine.getPublicView(color), turn: engine.turn } };
       }
-    } else {
-      room.msRemaining[color] -= elapsed;
-    }
 
-    let fromIdx, toIdx;
-    try { fromIdx = fromAlgebraic(from); toIdx = fromAlgebraic(to); } catch {
-      socket.emit('moveRejected', { clientMoveId, reason: 'malformed', state: sanitizedState(room, color) });
+      const now = Date.now();
+      const elapsed = now - room.turnStartedAtServerTs;
+      const overrun = elapsed - room.msRemaining[color];
+      if (overrun > 0) {
+        if (overrun <= LAG_GRACE_MS) {
+          room.msRemaining[color] = 0; // decided in time, just arrived a little late
+        } else {
+          return { [NO_CHANGE]: true, timeout: otherColor(color) };
+        }
+      } else {
+        room.msRemaining[color] -= elapsed;
+      }
+
+      let fromIdx, toIdx;
+      try { fromIdx = fromAlgebraic(from); toIdx = fromAlgebraic(to); } catch {
+        return { [NO_CHANGE]: true, reject: { reason: 'malformed', board: engine.getPublicView(color), turn: engine.turn } };
+      }
+
+      const result = engine.makeMove({ from: fromIdx, to: toIdx, promotion: promotion || null });
+      if (!result.ok) {
+        return { [NO_CHANGE]: true, reject: { reason: result.reason, board: engine.getPublicView(color), turn: engine.turn } };
+      }
+
+      room.msRemaining[color] += room.incMs;
+      room.turnStartedAtServerTs = now;
+      room.drawOfferBy = null; // any move implicitly declines a pending draw offer
+      room.engineData = serializeEngine(engine);
+      return { [NO_CHANGE]: false, color, record: result.record };
+    });
+
+    if (!outcome) return;
+    const { result } = outcome;
+    if (result.reject) {
+      socket.emit('moveRejected', { clientMoveId, reason: result.reject.reason, state: { board: result.reject.board, turn: result.reject.turn } });
       return;
     }
-
-    const result = room.engine.makeMove({ from: fromIdx, to: toIdx, promotion: promotion || null });
-    if (!result.ok) {
-      socket.emit('moveRejected', { clientMoveId, reason: result.reason, state: sanitizedState(room, color) });
+    if (result.timeout) {
+      await endGame(gameId, resultForWinner(result.timeout), 'timeout');
       return;
     }
+    if (!outcome.saved) return; // shouldn't happen (covered by reject/timeout above), but guard anyway
 
-    room.msRemaining[color] += room.incMs;
-    room.turnStartedAtServerTs = now;
-    room.drawOfferBy = null; // any move implicitly declines a pending draw offer
-
-    const record = result.record;
+    const room = outcome.room;
+    const { color, record } = result;
+    const engine = deserializeEngine(room.engineData);
+    const clocks = currentClocks(room);
     for (const c of ['w', 'b']) {
       io.to(room.sockets[c]).emit('moveApplied', {
         move: { from: algebraic(record.from), to: algebraic(record.to) },
-        state: sanitizedState(room, c),
-        clocks: currentClocks(room),
+        state: { board: engine.getPublicView(c), turn: engine.turn },
+        clocks,
       });
     }
 
@@ -574,33 +668,44 @@ io.on('connection', (socket) => {
       io.to(room.sockets[color]).emit('revealEvent', { square: algebraic(record.to), trueType: 'queen' });
     }
 
-    if (room.engine.gameOver) {
-      const go = room.engine.gameOver;
+    if (engine.gameOver) {
+      const go = engine.gameOver;
       const result2 = go.result === 'draw' ? 'draw' : (go.result === 'white_wins' ? 'white' : 'black');
-      endGame(room, result2, go.reason);
+      await endGame(gameId, result2, go.reason);
     }
   });
 
-  socket.on('resign', () => {
-    const room = roomForSocket(socket);
+  socket.on('resign', async ({ gameId }) => {
+    const room = await loadRoom(gameId);
     if (!room || room.phase !== 'in_progress') return;
-    const winner = otherColor(socket.data.color);
-    endGame(room, resultForWinner(winner), 'resignation');
+    const color = colorForSocket(room, socket.id);
+    if (!color) return;
+    await endGame(gameId, resultForWinner(otherColor(color)), 'resignation');
   });
 
-  socket.on('offerDraw', () => {
-    const room = roomForSocket(socket);
-    if (!room || room.phase !== 'in_progress') return;
-    room.drawOfferBy = socket.data.color;
-    io.to(room.sockets[otherColor(socket.data.color)]).emit('drawOffered', { byColor: socket.data.color });
+  socket.on('offerDraw', async ({ gameId }) => {
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase !== 'in_progress') return { [NO_CHANGE]: true };
+      const color = colorForSocket(room, socket.id);
+      if (!color) return { [NO_CHANGE]: true };
+      room.drawOfferBy = color;
+      return { [NO_CHANGE]: false, color };
+    });
+    if (outcome && outcome.saved) {
+      const room = outcome.room;
+      io.to(room.sockets[otherColor(outcome.result.color)]).emit('drawOffered', { byColor: outcome.result.color });
+    }
   });
 
-  socket.on('respondDraw', ({ accept }) => {
-    const room = roomForSocket(socket);
-    if (!room || room.phase !== 'in_progress') return;
-    if (!room.drawOfferBy || room.drawOfferBy === socket.data.color) return;
-    room.drawOfferBy = null;
-    if (accept) endGame(room, 'draw', 'draw_agreement');
+  socket.on('respondDraw', async ({ gameId, accept }) => {
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase !== 'in_progress') return { [NO_CHANGE]: true };
+      const color = colorForSocket(room, socket.id);
+      if (!color || !room.drawOfferBy || room.drawOfferBy === color) return { [NO_CHANGE]: true };
+      room.drawOfferBy = null;
+      return { [NO_CHANGE]: false };
+    });
+    if (outcome && outcome.saved && accept) await endGame(gameId, 'draw', 'draw_agreement');
   });
 
   socket.on('ping', ({ clientTime }) => {
@@ -608,57 +713,55 @@ io.on('connection', (socket) => {
   });
 
   // A dropped connection presents as a brand-new socket with no socket.data
-  // yet, so this can't go through roomForSocket() (which relies on
-  // socket.data.gameId already being set) — look the room up directly by
-  // gameId, then confirm the token actually belongs to one of its colors.
-  socket.on('resumeGame', ({ gameId, resumeToken }) => {
-    const room = rooms.get(gameId);
-    if (!room || room.phase === 'over') {
-      socket.emit('resumeFailed', { reason: 'no_such_game' });
-      return;
-    }
-    const color = room.resumeTokens.w === resumeToken ? 'w' : room.resumeTokens.b === resumeToken ? 'b' : null;
-    if (!color) {
-      socket.emit('resumeFailed', { reason: 'invalid_token' });
-      return;
-    }
-    if (room.disconnectTimers[color]) {
-      clearTimeout(room.disconnectTimers[color]);
-      room.disconnectTimers[color] = null;
-    }
-    room.sockets[color] = socket.id;
+  // yet, so this can't go through a local socket.data.gameId lookup —
+  // loads the room straight from Redis by gameId (works from any instance)
+  // and confirms the token actually belongs to one of its colors.
+  socket.on('resumeGame', async ({ gameId, resumeToken }) => {
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase === 'over') return { [NO_CHANGE]: true, fail: 'no_such_game' };
+      const color = room.resumeTokens.w === resumeToken ? 'w' : room.resumeTokens.b === resumeToken ? 'b' : null;
+      if (!color) return { [NO_CHANGE]: true, fail: 'invalid_token' };
+      room.sockets[color] = socket.id;
+      room.disconnectDeadline[color] = null;
+      return { [NO_CHANGE]: false, color };
+    });
+    if (!outcome) { socket.emit('resumeFailed', { reason: 'no_such_game' }); return; }
+    if (outcome.result.fail) { socket.emit('resumeFailed', { reason: outcome.result.fail }); return; }
+
+    const room = outcome.room;
+    const color = outcome.result.color;
+    await setBusy(socket.id, { status: 'in_game', gameId });
     socket.data.gameId = gameId;
     socket.data.color = color;
-    if (socket.handshake.auth && socket.handshake.auth.token) {
-      const authUser = verifyToken(socket.handshake.auth.token);
-      if (authUser) socket.data.user = authUser;
-    }
-    socket.join(`game:${gameId}`);
+
+    const engine = deserializeEngine(room.engineData);
     socket.emit('resumed', {
       gameId, yourColor: color, phase: room.phase,
-      state: sanitizedState(room, color), clocks: currentClocks(room), timeControl: room.timeControl,
+      state: { board: engine.getPublicView(color), turn: engine.turn },
+      clocks: currentClocks(room), timeControl: room.timeControl,
     });
     io.to(room.sockets[otherColor(color)]).emit('opponentReconnected');
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     const code = socket.data.pendingChallengeCode;
-    if (code) challenges.delete(code);
-    removeFromQueue(socket.id);
-    const room = roomForSocket(socket);
-    if (!room || room.phase === 'over') return;
+    if (code) await deleteChallenge(code).catch(() => {});
+    await dequeuePlayerBySocketId(socket.id).catch(() => {});
+    const busy = await getBusy(socket.id).catch(() => null);
+    if (busy && busy.status === 'queued') await clearBusy(socket.id).catch(() => {});
+
+    const gameId = socket.data.gameId;
     const color = socket.data.color;
-    const opponentColor = otherColor(color);
-    io.to(room.sockets[opponentColor]).emit('opponentDisconnected', { graceMs: DISCONNECT_GRACE_MS });
-    // If the SAME socket id reconnects and calls resumeGame before the
-    // timer fires, resumeGame clears it above. If room.sockets[color] has
-    // already moved on to a newer socket id by the time this fires (this
-    // was a stale/duplicate disconnect event), skip — the current holder
-    // of that color is still connected.
-    room.disconnectTimers[color] = setTimeout(() => {
-      if (room.phase === 'over' || room.sockets[color] !== socket.id) return;
-      endGame(room, resultForWinner(opponentColor), 'abandonment');
-    }, DISCONNECT_GRACE_MS);
+    if (!gameId || !color) return; // never played a room-scoped message on this instance — see cluster.js's note on this edge case
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase === 'over') return { [NO_CHANGE]: true };
+      if (room.sockets[color] !== socket.id) return { [NO_CHANGE]: true }; // stale — this socket isn't the current holder of that color anymore (already resumed elsewhere)
+      room.disconnectDeadline[color] = Date.now() + DISCONNECT_GRACE_MS;
+      return { [NO_CHANGE]: false };
+    }).catch(() => null);
+    if (outcome && outcome.saved) {
+      io.to(outcome.room.sockets[otherColor(color)]).emit('opponentDisconnected', { graceMs: DISCONNECT_GRACE_MS });
+    }
   });
 });
 
@@ -666,6 +769,6 @@ initSchema()
   .catch((err) => console.error('Schema init failed (accounts/history may not work):', err))
   .finally(() => {
     httpServer.listen(PORT, () => {
-      console.log(`Hidden Queen Chess server listening on :${PORT}`);
+      console.log(`Hidden Queen Chess server listening on :${PORT} (instance ${INSTANCE_ID.slice(0, 8)})`);
     });
   });

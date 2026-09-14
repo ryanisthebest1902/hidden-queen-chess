@@ -66,14 +66,15 @@ async function main() {
     assert(aliceMatch.opponentName === 'Bob', 'Alice sees opponent name "Bob" from Bob\'s account, not a freeform guest name');
     assert(bobMatch.opponentName === 'Alice', 'Bob sees opponent name "Alice" from Alice\'s account');
 
+    const gameId = aliceMatch.gameId;
     const white = aliceMatch.yourColor === 'w' ? alice : bob;
     const black = aliceMatch.yourColor === 'b' ? alice : bob;
-    white.emit('submitHiddenQueen', { square: 'b1' });
-    black.emit('submitHiddenQueen', { square: 'b8' });
+    white.emit('submitHiddenQueen', { gameId, square: 'b1' });
+    black.emit('submitHiddenQueen', { gameId, square: 'b8' });
     await Promise.all([waitForEvent(white, 'gameStart'), waitForEvent(black, 'gameStart')]);
 
     const [whiteOver, blackOver] = [waitForEvent(white, 'gameOver'), waitForEvent(black, 'gameOver')];
-    black.emit('resign');
+    black.emit('resign', { gameId });
     await Promise.all([whiteOver, blackOver]);
 
     await wait(500); // persistCompletedGame() is fire-and-forget — give it a moment to land

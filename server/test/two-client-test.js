@@ -68,14 +68,15 @@ async function main() {
     assert(aliceMatch.gameId === bobMatch.gameId, 'both clients matched into the same game');
     assert(aliceMatch.yourColor !== bobMatch.yourColor, 'clients were assigned opposite colors');
 
+    const gameId = aliceMatch.gameId;
     const white = aliceMatch.yourColor === 'w' ? alice : bob;
     const black = aliceMatch.yourColor === 'b' ? alice : bob;
     const whiteLog = aliceMatch.yourColor === 'w' ? aliceLog : bobLog;
     const blackLog = aliceMatch.yourColor === 'b' ? aliceLog : bobLog;
 
     console.log('Submitting hidden queens (white: queenside rook a1, black: queenside knight b8)...');
-    white.emit('submitHiddenQueen', { square: 'a1' });
-    black.emit('submitHiddenQueen', { square: 'b8' });
+    white.emit('submitHiddenQueen', { gameId, square: 'a1' });
+    black.emit('submitHiddenQueen', { gameId, square: 'b8' });
     await Promise.all([waitForEvent(white, 'gameStart'), waitForEvent(black, 'gameStart')]);
 
     // Sanity: at gameStart, black's view of a1 must show the disguise ('R'),
@@ -89,7 +90,7 @@ async function main() {
     async function playMove(mover, from, to, expectReveal = false) {
       const otherLog = mover === white ? blackLog : whiteLog;
       const beforeLen = otherLog.length;
-      mover.emit('makeMove', { from, to, promotion: null, clientMoveId: `${from}-${to}` });
+      mover.emit('makeMove', { gameId, from, to, promotion: null, clientMoveId: `${from}-${to}` });
       const waits = [waitForEvent(white, 'moveApplied'), waitForEvent(black, 'moveApplied')];
       // revealEvent is emitted right after moveApplied for the same move —
       // wait for it explicitly too, or the log snapshot below can be taken
@@ -143,13 +144,13 @@ async function main() {
     const engineState = blackLog.filter(e => e.event === 'moveApplied').pop().payload.state;
     const turnColor = engineState.turn;
     const illegalMover = turnColor === 'w' ? white : black;
-    illegalMover.emit('makeMove', { from: 'a8', to: 'a1', clientMoveId: 'bogus' }); // not even illegalMover's piece typically
+    illegalMover.emit('makeMove', { gameId, from: 'a8', to: 'a1', clientMoveId: 'bogus' }); // not even illegalMover's piece typically
     const rejected = await waitForEvent(illegalMover, 'moveRejected');
     assert(!!rejected, 'a bogus move is rejected by the server rather than silently accepted');
 
     console.log('Testing resignation...');
     const [whiteOver, blackOver] = [waitForEvent(white, 'gameOver'), waitForEvent(black, 'gameOver')];
-    black.emit('resign');
+    black.emit('resign', { gameId });
     const [whiteResult, blackResult] = await Promise.all([whiteOver, blackOver]);
     assert(whiteResult.result === 'white' && whiteResult.reason === 'resignation', 'white is correctly declared the winner after black resigns');
     assert(blackResult.result === 'white' && blackResult.reason === 'resignation', 'both clients received the same gameOver result');

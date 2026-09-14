@@ -619,8 +619,68 @@ class Engine {
   }
 }
 
+// Phase 6 (multi-instance server): turns a live Engine into a plain JSON-
+// serializable object (for storing in Redis) and back. Pieces never carry
+// methods (Piece has none beyond its constructor), so plain objects work
+// fine on the way back in — no need to reconstruct real Piece instances,
+// same trick tests.html already uses when hand-placing board cells.
+function serializeEngine(e) {
+  return {
+    board: e.board.map(p => p ? {
+      type: p.type, color: p.color, id: p.id, isHiddenQueen: p.isHiddenQueen,
+      disguiseType: p.disguiseType, revealed: p.revealed, hasMoved: p.hasMoved,
+    } : null),
+    turn: e.turn,
+    castling: { ...e.castling },
+    epTarget: e.epTarget,
+    halfmoveClock: e.halfmoveClock,
+    fullmoveNumber: e.fullmoveNumber,
+    history: e.history,
+    positionCounts: [...e.positionCounts.entries()],
+    _nextId: e._nextId,
+    gameOver: e.gameOver,
+    setupPhase: e.setupPhase,
+    hiddenQueenId: { ...e.hiddenQueenId },
+    castledWhite: e.castledWhite,
+    castledBlack: e.castledBlack,
+  };
+}
+
+function deserializeEngine(data) {
+  const e = Object.create(Engine.prototype);
+  // Real Piece instances, not plain objects — Piece.displayType is a
+  // getter (see the class above), which only exists via the prototype
+  // chain. A plain {...p} spread copies the own enumerable fields but not
+  // that getter, silently making every piece's displayType (and so its
+  // apparent type on the wire) undefined. Same reconstruction pattern
+  // clone() already uses, for the same reason.
+  e.board = data.board.map(p => {
+    if (!p) return null;
+    const piece = Object.create(Piece.prototype);
+    piece.type = p.type; piece.color = p.color; piece.id = p.id;
+    piece.isHiddenQueen = p.isHiddenQueen; piece.disguiseType = p.disguiseType;
+    piece.revealed = p.revealed; piece.hasMoved = p.hasMoved;
+    return piece;
+  });
+  e.turn = data.turn;
+  e.castling = { ...data.castling };
+  e.epTarget = data.epTarget;
+  e.halfmoveClock = data.halfmoveClock;
+  e.fullmoveNumber = data.fullmoveNumber;
+  e.history = data.history;
+  e.positionCounts = new Map(data.positionCounts);
+  e._nextId = data._nextId;
+  e.gameOver = data.gameOver;
+  e.setupPhase = data.setupPhase;
+  e.hiddenQueenId = { ...data.hiddenQueenId };
+  e.castledWhite = data.castledWhite;
+  e.castledBlack = data.castledBlack;
+  return e;
+}
+
 const EngineExports = {
   Engine, WHITE, BLACK, PIECE_VALUE, sq, rankOf, fileOf, algebraic, otherColor,
+  serializeEngine, deserializeEngine,
 };
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = EngineExports;
