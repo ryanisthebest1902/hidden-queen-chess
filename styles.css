@@ -191,9 +191,11 @@ main {
 .modal-overlay.hidden { display: none; }
 /* The setup-instructions overlay must not block clicks on the board
    underneath it — the human picks their hidden queen by clicking a piece
-   while this banner is showing. */
+   while this banner is showing, including pieces the instruction card
+   itself happens to be sitting on top of. Safe to leave the whole thing
+   (backdrop AND card) non-interactive: setup-modal's box is pure text,
+   no buttons live inside it. */
 #setup-modal { background: transparent; pointer-events: none; }
-#setup-modal .modal-box { pointer-events: auto; }
 .modal-box {
   background: var(--panel);
   border: 1px solid var(--panel-border);
