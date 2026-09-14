@@ -655,7 +655,12 @@ io.on('connection', (socket) => {
     const clocks = currentClocks(room);
     for (const c of ['w', 'b']) {
       io.to(room.sockets[c]).emit('moveApplied', {
-        move: { from: algebraic(record.from), to: algebraic(record.to) },
+        // promotion/forcedReveal let a client-side engine converge to this
+        // exact move via the same disguise-replay trick the old Firebase
+        // guest used (see engine.js's applyRemoteMove) — without them, a
+        // non-Queen promotion or the back-rank-pawn edge case wouldn't
+        // replay correctly on a client that only has {from, to}.
+        move: { from: algebraic(record.from), to: algebraic(record.to), promotion: record.promotion || null, forcedReveal: !!record.forcedPawnReveal },
         state: { board: engine.getPublicView(c), turn: engine.turn },
         clocks,
       });

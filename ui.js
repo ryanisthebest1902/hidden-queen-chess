@@ -7,12 +7,7 @@
   const { chooseBotMove } = window.HiddenQueenBot;
   const { BOT_ROSTER, getEngineConfig } = window.HiddenQueenElo;
   const Rating = window.HiddenQueenRating;
-  const Net = window.HiddenQueenNet;
-  try {
-    if (window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey !== 'YOUR_API_KEY') {
-      Net.initFirebase(window.FIREBASE_CONFIG);
-    }
-  } catch (e) { /* left unconfigured — "Play Online" will show setup instructions */ }
+  const Net = window.HiddenQueenNet; // server-netplay.js — always connectable, no per-player setup step
 
   const HUMAN = WHITE;
   const BOT = BLACK;
@@ -123,10 +118,8 @@
   let premoveQueue = []; // [{from, to, promotion, intendedCapture}], see section 8 (bot mode only)
 
   // ---- online mode state ----
-  let onlineMoveState = null; // null | 'sending' — blocks re-clicking while a guest move is in flight
-  let onlineOpponentSetupDone = false; // host: has the guest sent their pick yet
+  let onlineMoveState = null; // null | 'sending' — blocks re-clicking while a move is in flight
   let onlineMySetupDone = false;
-  let pendingGuestSetupPieceId = null; // host: guest's pick, stashed if it arrives before `engine` exists
 
   // ---------- Rating display ----------
 
@@ -193,15 +186,14 @@
   });
   modeOnlineBtn.addEventListener('click', () => {
     modePickerModal.classList.add('hidden');
-    if (!Net.isConfigured()) {
-      showToast('Online play needs a one-time setup — see firebase-config.js for instructions, then reload.');
-      openModePicker();
-      return;
-    }
     onlinePickerModal.classList.remove('hidden');
   });
 
-  // ---------- Online play (section 11 extension: cross-device, via Firebase) ----------
+  // ---------- Online play (server-authoritative — see server-netplay.js) ----------
+  // Neither side is a "host" anymore — both colors are symmetric, and
+  // neither ever applies its own move locally before the server confirms
+  // it. That symmetry is what lets beginOnlineGame() below skip all the
+  // role branching the old Firebase version needed.
 
   onlineBackBtn.addEventListener('click', () => {
     onlinePickerModal.classList.add('hidden');
@@ -210,25 +202,17 @@
 
   onlineHostBtn.addEventListener('click', () => {
     onlinePickerModal.classList.add('hidden');
-    onlineStatusHeading.textContent = 'Hosting a game';
+    onlineStatusHeading.textContent = 'Creating a challenge';
     onlineRoomCodeDisplay.classList.add('hidden');
-    onlineStatusMessage.textContent = 'Setting up your room…';
+    onlineStatusMessage.textContent = 'Setting up your game…';
     onlineStatusModal.classList.remove('hidden');
 
     Net.hostGame({
-      onGuestJoined: () => {
+      onMatched: () => {
         onlineStatusModal.classList.add('hidden');
-        beginOnlineGame('host');
+        beginOnlineGame();
       },
-      onGuestSetupReceived: (pieceId) => {
-        // Guard against the (very unlikely, but possible) race where this
-        // arrives before beginOnlineGame('host') has created `engine` —
-        // stash it and apply once the engine exists.
-        pendingGuestSetupPieceId = pieceId;
-        applyPendingGuestSetupIfReady();
-      },
-      onGuestMove: (intent) => handleGuestMoveIntent(intent),
-      onGuestDisconnected: () => {
+      onOpponentDisconnected: () => {
         if (mode === 'online') showToast('Your opponent disconnected.');
       },
     }).then((code) => {
@@ -237,7 +221,7 @@
       onlineStatusMessage.textContent = 'Share this code with your friend. Waiting for them to join…';
     }).catch(() => {
       onlineStatusModal.classList.add('hidden');
-      showToast('Could not start hosting — check your Firebase setup in firebase-config.js.');
+      showToast('Could not reach the game server — try again in a moment.');
       openModePicker();
     });
   });
@@ -265,21 +249,21 @@
     if (!code) return;
     joinRoomError.classList.add('hidden');
     Net.joinGame(code, {
-      onHostDisconnected: () => {
+      onOpponentDisconnected: () => {
         if (mode === 'online') showToast('Your opponent disconnected.');
       },
     }).then(() => {
       joinRoomModal.classList.add('hidden');
-      beginOnlineGame('guest');
+      beginOnlineGame();
     }).catch((err) => {
-      joinRoomError.textContent = err.message === 'room_not_found' ? "That room code wasn't found."
-        : err.message === 'room_full' ? 'That room already has two players.'
-        : 'Could not join — check your Firebase setup in firebase-config.js.';
+      joinRoomError.textContent = err.message === 'no_such_game' || err.message === 'not_found' ? "That code wasn't found."
+        : err.message === 'creator_gone' ? 'Your friend disconnected before you could join.'
+        : 'Could not join — try again in a moment.';
       joinRoomError.classList.remove('hidden');
     });
   });
 
-  function beginOnlineGame(role) {
+  function beginOnlineGame() {
     gameId++;
     mode = 'online';
     engine = new Engine();
@@ -292,9 +276,7 @@
     ratingRecordedThisGame = true; // online games don't touch the practice rating
     premoveQueue = [];
     onlineMoveState = null;
-    onlineOpponentSetupDone = false;
     onlineMySetupDone = false;
-    pendingGuestSetupPieceId = null;
     premovePanelBox.classList.add('hidden'); // no local "opponent thinking" window to premove into — see section 8 scoping note
     historyList.innerHTML = '';
     trayByHuman.innerHTML = '';
@@ -305,48 +287,69 @@
     statusBanner.textContent = 'Choose your hidden queen — click one of your pieces below.';
     statusBanner.className = '';
 
-    if (role === 'guest') {
-      // The guest never applies its own moves directly — it sends intent
-      // and waits for the host's authoritative echo. See netplay.js.
-      Net.onCommittedMove((msg, idx) => {
-        if (idx < engine.history.length) return; // already applied — safety guard
-        const result = Net.applyRemoteMove(engine, msg);
-        onlineMoveState = null;
-        if (result.ok) {
-          lastMoveSquares = { from: result.record.from, to: result.record.to };
-          processOnlineRevealToasts(result.record);
-        }
-        render();
-        updateStatusAndTurn();
-      });
-      Net.onMoveRejected(() => {
-        onlineMoveState = null;
-        showToast("That move wasn't accepted — try again.");
-        render();
-      });
-      Net.onGameStarted(() => {
-        stage = 'playing';
-        statusBanner.textContent = '';
-        updateStatusAndTurn();
-        render();
-      });
-    }
-
-    Net.onGameOver((info) => {
-      // The host is authoritative and already transitions itself via its
-      // own local engine.makeMove() result. This listener is NECESSARY
-      // (not just a safety net) for the guest: guest's local checkmate/
-      // stalemate detection can be wrong whenever it's evaluating whether
-      // the OPPONENT has legal moves, since "any legal moves?" depends on
-      // that side's OWN true piece powers — which guest may not fully know
-      // if the opponent still has an unrevealed hidden queen providing an
-      // escape guest's local engine can't see. Trust the host's answer.
-      if (Net.currentRole() !== 'guest') return;
-      if (!engine.gameOver) engine.gameOver = info;
+    // Neither color ever applies its own move directly anymore — both send
+    // intent to the server and wait for its authoritative echo, exactly
+    // like the old Firebase guest always did (see engine.js's
+    // applyRemoteMove and server-netplay.js's onMoveApplied).
+    Net.onMoveApplied(({ remoteMoveMsg }) => {
+      const result = Net.applyRemoteMove(engine, remoteMoveMsg);
+      onlineMoveState = null;
+      if (result.ok) {
+        lastMoveSquares = { from: result.record.from, to: result.record.to };
+        processOnlineRevealToasts(result.record);
+      }
+      render();
       updateStatusAndTurn();
     });
-
-    if (role === 'host') applyPendingGuestSetupIfReady();
+    Net.onMoveRejected(() => {
+      onlineMoveState = null;
+      showToast("That move wasn't accepted — try again.");
+      render();
+    });
+    Net.onGameStart((payload) => {
+      // Usually fires only after this client has already designated its own
+      // hidden queen locally (via onSetupClick below). But the server also
+      // auto-picks a random queen for a player who doesn't choose within
+      // its setup timeout, and still starts the game — in that case this
+      // client's local engine was never told which of its own pieces got
+      // picked. Backfill it here from the server's public board view: it
+      // flags isHiddenQueen:true for the owner's own pieces even while
+      // still disguised (see engine.js's getPublicView), which is exactly
+      // enough info to replay the same designation locally.
+      if (!onlineMySetupDone) {
+        const myColor = Net.currentColor();
+        const mine = payload.state.board.find(p => p && p.color === myColor && p.isHiddenQueen);
+        if (mine) engine.designateHiddenQueen(myColor, mine.id);
+        onlineMySetupDone = true;
+      }
+      setupModal.classList.add('hidden');
+      confirmModal.classList.add('hidden');
+      stage = 'playing';
+      statusBanner.textContent = '';
+      updateStatusAndTurn();
+      render();
+    });
+    Net.onGameOver((info) => {
+      // The server is authoritative for end-of-game, and this listener is
+      // NECESSARY (not just a safety net): this client's own local
+      // checkmate/stalemate detection can be wrong whenever it's
+      // evaluating whether the OPPONENT has legal moves, since that
+      // depends on their OWN true piece powers — which this side may not
+      // fully know if the opponent still has an unrevealed hidden queen
+      // providing an escape this local engine can't see. Trust the
+      // server's answer. Only actually overrides anything for reasons a
+      // local engine could never detect on its own (resignation, timeout,
+      // abandonment) — checkmate/stalemate/etc. were already set correctly
+      // by the local replay above, via the identical detection logic the
+      // server also runs, so this is a no-op for those.
+      if (!engine.gameOver) {
+        engine.gameOver = {
+          result: info.result === 'white' ? 'white_wins' : info.result === 'black' ? 'black_wins' : 'draw',
+          reason: info.reason,
+        };
+      }
+      updateStatusAndTurn();
+    });
 
     if (introModal.classList.contains('hidden')) {
       setupModal.classList.remove('hidden');
@@ -355,43 +358,8 @@
     render();
   }
 
-  function applyPendingGuestSetupIfReady() {
-    if (!engine || pendingGuestSetupPieceId == null || onlineOpponentSetupDone) return;
-    engine.designateHiddenQueen(BLACK, pendingGuestSetupPieceId);
-    onlineOpponentSetupDone = true;
-    maybeStartOnlineGame();
-  }
-
-  function maybeStartOnlineGame() {
-    if (!onlineMySetupDone || !onlineOpponentSetupDone) return;
-    engine.maybeStartGame();
-    stage = 'playing';
-    Net.hostSetGameStarted();
-    statusBanner.textContent = '';
-    updateStatusAndTurn();
-    render();
-  }
-
-  // Host validates and applies a move the guest wants to make, then
-  // broadcasts the result. Rejects (never silently substitutes) if it
-  // turns out illegal against the host's authoritative state.
-  function handleGuestMoveIntent(intent) {
-    const legal = engine.legalMovesFrom(intent.from);
-    const chosen = legal.find(m => m.to === intent.to);
-    if (!chosen) { Net.hostRejectGuestMove('illegal'); return; }
-    const result = engine.makeMove({ from: intent.from, to: intent.to, promotion: intent.promotion || undefined });
-    if (!result.ok) { Net.hostRejectGuestMove('illegal'); return; }
-    const rec = result.record;
-    lastMoveSquares = { from: rec.from, to: rec.to };
-    processOnlineRevealToasts(rec);
-    render();
-    updateStatusAndTurn();
-    Net.hostBroadcastMove(rec, engine.history.length - 1);
-    if (engine.gameOver) Net.hostReportGameOver({ result: engine.gameOver.result, reason: engine.gameOver.reason });
-  }
-
   // Online equivalent of processRevealAndCaptureToasts / showHotseatRevealToasts:
-  // shown from MY perspective (Net.currentColor()), regardless of host/guest role.
+  // shown from MY perspective (Net.currentColor()).
   function processOnlineRevealToasts(rec) {
     const meColor = Net.currentColor();
     if (rec.wasHiddenAndRevealedThisMove && rec.color !== meColor) {
@@ -565,8 +533,7 @@
       stage = 'playing';
     } else if (mode === 'online') {
       onlineMySetupDone = true;
-      if (Net.currentRole() === 'guest') Net.guestSendSetupPick(piece.id); // host needs this to referee — see netplay.js
-      else maybeStartOnlineGame(); // host: check if guest already picked too
+      Net.submitSetupPick(square); // server referees both picks and fires gameStart once both arrive
     }
     // hotseat: stays in 'setup' conceptually until both colors have picked —
     // confirmContinueBtn (below) drives the White->Black->play sequence.
@@ -1034,14 +1001,15 @@
   }
 
   function commitHumanMove(move) {
-    if (mode === 'online' && Net.currentRole() === 'guest') {
-      // Never apply locally — send intent and wait for the host's
-      // authoritative echo (see netplay.js module comment for why).
+    if (mode === 'online') {
+      // Neither color ever applies its own move locally — send intent and
+      // wait for the server's authoritative echo (see server-netplay.js /
+      // Net.onMoveApplied in beginOnlineGame above).
       selected = null; legalTargets = [];
       onlineMoveState = 'sending';
       turnIndicator.innerHTML = `Turn: <strong>You</strong> <span class="bot-thinking">— sending move…</span>`;
       render();
-      Net.guestSendMoveIntent(move);
+      Net.sendMove(move);
       return;
     }
 
@@ -1050,16 +1018,6 @@
     const rec = result.record;
     selected = null; legalTargets = [];
     lastMoveSquares = { from: rec.from, to: rec.to };
-
-    if (mode === 'online') {
-      // Host: apply directly (authoritative), then broadcast for the guest.
-      processOnlineRevealToasts(rec);
-      render();
-      updateStatusAndTurn();
-      Net.hostBroadcastMove(rec, engine.history.length - 1);
-      if (engine.gameOver) Net.hostReportGameOver({ result: engine.gameOver.result, reason: engine.gameOver.reason });
-      return;
-    }
 
     if (mode === 'hotseat') {
       // Reveal toasts are deferred to the moment the INCOMING player

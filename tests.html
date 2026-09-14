@@ -20,7 +20,6 @@
 <script src="elo.js"></script>
 <script src="rating.js"></script>
 <script src="bot.js"></script>
-<script src="netplay.js"></script>
 <script>
 const { Engine, sq, rankOf, fileOf } = window.HiddenQueenEngine;
 const { chooseBotMove } = window.HiddenQueenBot;
@@ -369,7 +368,7 @@ section('Player rating math');
 // matches host's authoritative engine exactly, via replay-with-retry ----------
 section('Netplay convergence (online play sync)');
 {
-  const { applyRemoteMove } = window.HiddenQueenNet;
+  const { applyRemoteMove } = window.HiddenQueenEngine;
 
   const host = new Engine();
   const whiteRook = host.board.find(p => p && p.type === 'R' && p.color === 'w' && host.board.indexOf(p) === sq(0, 0));
@@ -410,7 +409,7 @@ section('Netplay convergence (online play sync)');
 
   const revealedOnGuest = guest.board[sq(4, 2)];
   assert(revealedOnGuest && revealedOnGuest.type === 'Q' && revealedOnGuest.revealed,
-    'guest discovers the reveal purely by a failed replay-then-retry — netplay.js never transmits which piece is secretly the queen');
+    'guest discovers the reveal purely by a failed replay-then-retry — the wire protocol never transmits which piece is secretly the queen');
 
   // A move that stays disguise-consistent must NOT trigger the retry path
   // (i.e. no false-positive reveals from guest's replay).
@@ -421,7 +420,7 @@ section('Netplay convergence (online play sync)');
 // itself looked disguise-consistent (back-rank pawn edge case) ----------
 section('Netplay forcedReveal flag (back-rank pawn edge case)');
 {
-  const { applyRemoteMove } = window.HiddenQueenNet;
+  const { applyRemoteMove } = window.HiddenQueenEngine;
 
   const host = new Engine();
   const pawn = host.board.find(p => p && p.type === 'P' && p.color === 'w' && host.board.indexOf(p) === sq(1, 3));

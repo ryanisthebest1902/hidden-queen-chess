@@ -678,9 +678,43 @@ function deserializeEngine(data) {
   return e;
 }
 
+// Used by any network layer (Firebase host/guest originally, now the
+// server-authoritative client) to converge a LOCAL engine to match a move
+// that happened elsewhere, without ever being told a still-hidden piece's
+// true type. Tries the move as-is first (assuming the mover's piece is
+// still whatever its disguise says); if that fails, the failure itself
+// proves a reveal (only a queen's moves are a strict superset of every
+// disguise's moves, and there's at most one hidden queen per side) — flips
+// the piece locally and retries. `forcedReveal` (only ever true for the
+// back-rank-pawn edge case, where the move looks disguise-consistent but
+// must still force-reveal) is applied afterward regardless of which path
+// succeeded, since that case never fails the as-is attempt in the first
+// place.
+function applyRemoteMove(engine, msg) {
+  let result = engine.makeMove({ from: msg.from, to: msg.to, promotion: msg.promotion || undefined });
+  if (!result.ok) {
+    const piece = engine.board[msg.from];
+    if (piece && !piece.isHiddenQueen) {
+      piece.disguiseType = piece.type;
+      piece.type = 'Q';
+      piece.isHiddenQueen = true;
+      result = engine.makeMove({ from: msg.from, to: msg.to, promotion: msg.promotion || undefined });
+    }
+  }
+  if (result.ok && msg.forcedReveal) {
+    const landed = engine.board[msg.to];
+    if (landed && !landed.revealed) {
+      landed.type = 'Q';
+      landed.revealed = true;
+      landed.isHiddenQueen = true;
+    }
+  }
+  return result;
+}
+
 const EngineExports = {
   Engine, WHITE, BLACK, PIECE_VALUE, sq, rankOf, fileOf, algebraic, otherColor,
-  serializeEngine, deserializeEngine,
+  serializeEngine, deserializeEngine, applyRemoteMove,
 };
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = EngineExports;

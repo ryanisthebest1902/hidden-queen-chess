@@ -15,26 +15,21 @@ Just open `index.html` in a browser, or serve the folder with any static
 file server. No build step, no dependencies for bot play or local
 pass-and-play mode.
 
-## Setting up online play
+## Online play
 
-Online play needs a free Firebase Realtime Database project (about 5
-minutes, one-time). Full instructions are in
-[`firebase-config.js`](firebase-config.js) — open that file and follow the
-steps at the top, then fill in your project's config values in the same
-file.
+Online play is server-authoritative: a Node/Socket.IO backend (in
+[`server/`](server/)) runs the real rules engine and is the sole source of
+truth for both players' moves and hidden-queen identities. Neither
+player's browser ever learns the opponent's secret — the server never
+sends a still-hidden piece's true type to the wrong viewer. Just click
+"Play Online"; there's no per-player setup, the client (`server-netplay.js`)
+connects straight to the deployed server.
 
-Until you do this, "Play Online" will show a message pointing here instead
-of connecting.
-
-**Note on secrecy over the network:** since this ships as static files
-with no backend server, the player who *hosts* a game runs the
-authoritative rules engine — the same trust model as a local pass-and-play
-game, just extended over a network connection. Your opponent's browser
-never receives your hidden queen's identity, and vice versa when you're
-the guest — but the host's own browser memory does technically hold both
-players' secrets to referee the game. This is disclosed, not hidden: don't
-host high-stakes games against someone you don't trust not to open
-devtools.
+The server also supports accounts, match history, Elo-based ratings and
+matchmaking, reconnection after a dropped connection, and horizontal
+scaling across multiple instances sharing one Redis-backed state store —
+see [`server/`](server/) for the source if you want to run or deploy your
+own instance.
 
 ## Deploying to GitHub Pages
 
@@ -43,19 +38,21 @@ devtools.
    (root folder).
 3. Once it publishes, your game is live at
    `https://<your-username>.github.io/<repo-name>/`.
-4. Fill in `firebase-config.js` (see above) either before or after
-   deploying — online play works as soon as real config values are live on
-   the deployed site, no rebuild needed.
+
+This deploys only the static client. Online play talks to whatever server
+URL is configured in `server-netplay.js` — deploy `server/` separately
+(e.g. to Render) and point that constant at it.
 
 ## Project structure
 
 | File | Purpose |
 |---|---|
-| `engine.js` | Rules engine: board state, legal moves, check/checkmate/draw detection, the hidden-queen reveal logic. The only source of truth for what's legal. |
+| `engine.js` | Rules engine: board state, legal moves, check/checkmate/draw detection, the hidden-queen reveal logic. The only source of truth for what's legal. Also exports `applyRemoteMove`, the disguise-replay trick a client uses to converge to a move it wasn't told the true identity behind. |
 | `elo.js` | Bot roster (250–3200 Elo) and the search-config knobs (depth, temperature, blunder chance, eval layers, determinization samples) for each tier. |
 | `bot.js` | The bot's search: minimax/alpha-beta/quiescence with a transposition table and null-move pruning, run across multiple sampled hypotheses (determinization) for which opponent piece might be the hidden queen. Never reads the human's true piece types before they're revealed. |
 | `rating.js` | The player's local practice Elo rating and match history (bot games only; `localStorage`). |
-| `netplay.js` | Online play over Firebase Realtime Database — room hosting/joining and the host-authoritative move sync protocol. |
+| `server-netplay.js` | Online play client — connects to the server-authoritative backend over Socket.IO. Both colors are symmetric: neither ever applies its own move locally before the server confirms it. |
+| `server/` | The server-authoritative backend: accounts, rooms, matchmaking, ratings, reconnection, and multi-instance scaling via Redis. |
 | `ui.js` | All rendering and click handling, for all three modes. |
 | `index.html` / `styles.css` | Markup and styling. |
 | `tests.html` | An in-browser automated test suite (open it directly) covering the reveal rules, the no-cheat guarantee, the bot's Elo scaling, the rating math, and the online-sync convergence trick. |

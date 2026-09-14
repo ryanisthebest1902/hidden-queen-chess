@@ -207,19 +207,16 @@
 
 <div id="toast-container"></div>
 
-<!-- Firebase (online play only — see firebase-config.js for setup). Loaded
-     from Google's CDN; harmless to leave in even before you've configured
-     your own project — "Play Online" just shows a setup-needed message
-     until FIREBASE_CONFIG has real values. -->
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
-<script src="firebase-config.js"></script>
+<!-- Online play (server-authoritative — see server/ and server-netplay.js).
+     Loaded from Socket.IO's CDN; harmless to leave in, "Play Online" just
+     talks to the deployed server directly, no per-player setup needed. -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <script src="engine.js"></script>
 <script src="elo.js"></script>
 <script src="rating.js"></script>
 <script src="bot.js"></script>
-<script src="netplay.js"></script>
+<script src="server-netplay.js"></script>
 <script src="ui.js"></script>
 </body>
 </html>
