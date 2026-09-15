@@ -626,9 +626,18 @@
     const revealAll = mode === 'hotseat' && stage === 'over';
     const pub = revealAll ? getFullTruthView() : engine.getPublicView(viewer);
     const checkSq = pieceInCheckSquare();
+    // Flip the board 180° when the current viewer is Black, so their own
+    // pieces are always on the bottom two rows like White's are — standard
+    // chess-UI convention. In bot mode HUMAN is always WHITE so this never
+    // triggers there; in hotseat it flips at every turn/setup handoff
+    // (matches a real board being physically rotated between players); in
+    // online mode it's whichever color this browser is playing.
+    const flipped = viewer === BLACK;
+    const ranks = flipped ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];
+    const files = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
 
-    for (let r = 7; r >= 0; r--) {
-      for (let f = 0; f < 8; f++) {
+    for (const r of ranks) {
+      for (const f of files) {
         const s = sq(r, f);
         const div = document.createElement('div');
         div.className = 'square ' + ((r + f) % 2 === 0 ? 'dark' : 'light');
@@ -672,7 +681,7 @@
         boardEl.appendChild(div);
       }
     }
-    for (let f = 0; f < 8; f++) {
+    for (const f of files) {
       const lbl = document.createElement('span');
       lbl.textContent = 'abcdefgh'[f];
       fileLabelsEl.appendChild(lbl);
