@@ -194,8 +194,14 @@ main {
    while this banner is showing, including pieces the instruction card
    itself happens to be sitting on top of. Safe to leave the whole thing
    (backdrop AND card) non-interactive: setup-modal's box is pure text,
-   no buttons live inside it. */
-#setup-modal { background: transparent; pointer-events: none; }
+   no buttons live inside it.
+
+   It's also pushed up near the TOP of the board (the opponent's pieces —
+   your own pieces are always drawn on the bottom two ranks, whichever
+   color you are) instead of dead center, so it never visually sits on
+   top of the pieces you're actually choosing from. */
+#setup-modal { background: transparent; pointer-events: none; align-items: flex-start; }
+#setup-modal .modal-box { margin-top: 160px; }
 .modal-box {
   background: var(--panel);
   border: 1px solid var(--panel-border);
