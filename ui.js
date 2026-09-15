@@ -301,10 +301,17 @@
       render();
       updateStatusAndTurn();
     });
-    Net.onMoveRejected(() => {
+    Net.onMoveRejected((payload) => {
       onlineMoveState = null;
+      // Surfaced for diagnosis — the server is authoritative and rejects
+      // for a specific reason (not_your_turn, illegal, malformed, no_piece,
+      // game_over); a silent generic toast makes a real desync between
+      // this client's local engine and the server's indistinguishable from
+      // an ordinary illegal-move click.
+      console.warn('[online] move rejected:', payload && payload.reason, payload);
       showToast("That move wasn't accepted — try again.");
       render();
+      updateStatusAndTurn(); // clears the "sending move…" text commitHumanMove set — otherwise it's stuck forever
     });
     Net.onGameStart((payload) => {
       // Usually fires only after this client has already designated its own
