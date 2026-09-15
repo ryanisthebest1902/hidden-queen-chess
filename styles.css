@@ -147,7 +147,7 @@ main {
 
 .file-labels, .rank-labels { display: flex; color: var(--text-dim); font-size: 0.75em; }
 .file-labels { justify-content: space-around; width: 448px; }
-.board-row { display: flex; align-items: center; gap: 4px; }
+.board-row { display: flex; align-items: center; gap: 4px; position: relative; }
 
 .side-panel {
   width: 300px;
@@ -189,19 +189,23 @@ main {
 }
 .hidden { display: none !important; }
 .modal-overlay.hidden { display: none; }
-/* The setup-instructions overlay must not block clicks on the board
-   underneath it — the human picks their hidden queen by clicking a piece
-   while this banner is showing, including pieces the instruction card
-   itself happens to be sitting on top of. Safe to leave the whole thing
-   (backdrop AND card) non-interactive: setup-modal's box is pure text,
-   no buttons live inside it.
-
-   It's also pushed up near the TOP of the board (the opponent's pieces —
-   your own pieces are always drawn on the bottom two ranks, whichever
-   color you are) instead of dead center, so it never visually sits on
-   top of the pieces you're actually choosing from. */
-#setup-modal { background: transparent; pointer-events: none; align-items: flex-start; }
-#setup-modal .modal-box { margin-top: 160px; }
+/* The hidden-queen instruction card lives inside .board-row (not the usual
+   viewport-fixed .modal-overlay) and is positioned absolutely against the
+   board itself — anchored to the board's own top edge, over the opponent's
+   pieces, rather than a fixed pixel offset from the viewport. A fixed
+   offset only happened to work for whatever header/nameplate height it was
+   tuned against; anchoring to the board is correct at any header height or
+   viewport size. Your own pieces are always drawn on the bottom two ranks
+   regardless of which color you're playing, so this keeps the card clear
+   of them. It's also fully click-through — no buttons live inside it, the
+   player picks their hidden queen by clicking the board underneath. */
+.board-hint {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex; justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
 .modal-box {
   background: var(--panel);
   border: 1px solid var(--panel-border);

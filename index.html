@@ -28,6 +28,12 @@
     <div id="turn-indicator"></div>
     <div class="board-row">
       <div id="board"></div>
+      <div class="board-hint hidden" id="setup-modal">
+        <div class="modal-box">
+          <h2 id="setup-modal-heading">Choose your hidden queen</h2>
+          <p>Click one of your pieces on the board (any piece except your King) to secretly make it your queen. It will keep its normal appearance to your opponent — only you'll see a small crown marker on it.</p>
+        </div>
+      </div>
     </div>
     <div class="file-labels" id="file-labels"></div>
   </div>
@@ -151,14 +157,6 @@
     <div class="modal-actions">
       <button class="primary" id="interstitial-ready-btn">I'm ready</button>
     </div>
-  </div>
-</div>
-
-<!-- Human hidden-queen designation -->
-<div class="modal-overlay hidden" id="setup-modal">
-  <div class="modal-box">
-    <h2 id="setup-modal-heading">Choose your hidden queen</h2>
-    <p>Click one of your pieces on the board (any piece except your King) to secretly make it your queen. It will keep its normal appearance to your opponent — only you'll see a small crown marker on it.</p>
   </div>
 </div>
 
