@@ -20,6 +20,11 @@ const DEFAULT_RATING = 1500;
 const DEFAULT_RD = 200;
 const DEFAULT_VOL = 0.06;
 const PROVISIONAL_GAMES = 10;
+// A rating floor doesn't stop sandbagging (deliberately losing to tank your
+// rating so you can farm weaker opponents), but it bounds how bad the worst
+// case can get — without one, a determined sandbagger has no floor at all
+// to stop at.
+const MIN_RATING = 100;
 
 const ranking = new Glicko2({ tau: 0.5, rating: DEFAULT_RATING, rd: DEFAULT_RD, vol: DEFAULT_VOL });
 
@@ -66,8 +71,8 @@ async function applyGameResult({ whiteUserId, blackUserId, timeControl, result }
     const outcome = result === 'white' ? 1 : result === 'black' ? 0 : 0.5;
     ranking.updateRatings([[whitePlayer, blackPlayer, outcome]]);
 
-    const whiteAfter = { rating: whitePlayer.getRating(), rd: whitePlayer.getRd(), vol: whitePlayer.getVol() };
-    const blackAfter = { rating: blackPlayer.getRating(), rd: blackPlayer.getRd(), vol: blackPlayer.getVol() };
+    const whiteAfter = { rating: Math.max(MIN_RATING, whitePlayer.getRating()), rd: whitePlayer.getRd(), vol: whitePlayer.getVol() };
+    const blackAfter = { rating: Math.max(MIN_RATING, blackPlayer.getRating()), rd: blackPlayer.getRd(), vol: blackPlayer.getVol() };
 
     await client.query(
       `UPDATE ratings SET rating = $3, rd = $4, volatility = $5, games_played = games_played + 1, updated_at = now()
