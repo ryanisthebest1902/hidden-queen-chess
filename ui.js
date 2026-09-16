@@ -94,6 +94,16 @@
   const leaderboardCloseBtn = document.getElementById('leaderboard-close-btn');
   const leaderboardTabBtns = [...document.querySelectorAll('.leaderboard-tab-btn')];
 
+  const onlineControlsBox = document.getElementById('online-controls-box');
+  const resignBtn = document.getElementById('resign-btn');
+  const offerDrawBtn = document.getElementById('offer-draw-btn');
+  const resignConfirmModal = document.getElementById('resign-confirm-modal');
+  const resignCancelBtn = document.getElementById('resign-cancel-btn');
+  const resignConfirmBtn = document.getElementById('resign-confirm-btn');
+  const drawOfferModal = document.getElementById('draw-offer-modal');
+  const drawDeclineBtn = document.getElementById('draw-decline-btn');
+  const drawAcceptBtn = document.getElementById('draw-accept-btn');
+
   const botPickerModal = document.getElementById('bot-picker-modal');
   const botRosterListEl = document.getElementById('bot-roster-list');
   const pickerYourRatingEl = document.getElementById('picker-your-rating');
@@ -528,8 +538,10 @@
         lastMoveSquares = { from: result.record.from, to: result.record.to };
         processOnlineRevealToasts(result.record);
       }
-      render();
+      // updateStatusAndTurn() before render() — see the identical comment
+      // in Net.onGameOver above; a checkmating move hits this same path.
       updateStatusAndTurn();
+      render();
     });
     Net.onMoveRejected((payload) => {
       onlineMoveState = null;
@@ -585,7 +597,16 @@
           reason: info.reason,
         };
       }
+      // updateStatusAndTurn() sets stage = 'over' — must run before render(),
+      // since render() reads stage to decide whether Game Controls (resign/
+      // draw) should still be showing. Without this, resigning or an
+      // opponent's timeout left the buttons visible and clickable forever
+      // after the game had already ended.
       updateStatusAndTurn();
+      render();
+    });
+    Net.onDrawOffered(() => {
+      if (mode === 'online' && stage === 'playing') drawOfferModal.classList.remove('hidden');
     });
 
     if (introModal.classList.contains('hidden')) {
@@ -614,6 +635,30 @@
       }
     }
   }
+
+  resignBtn.addEventListener('click', () => {
+    resignConfirmModal.classList.remove('hidden');
+  });
+  resignCancelBtn.addEventListener('click', () => {
+    resignConfirmModal.classList.add('hidden');
+  });
+  resignConfirmBtn.addEventListener('click', () => {
+    resignConfirmModal.classList.add('hidden');
+    Net.resign();
+  });
+
+  offerDrawBtn.addEventListener('click', () => {
+    Net.offerDraw();
+    showToast('Draw offer sent.');
+  });
+  drawDeclineBtn.addEventListener('click', () => {
+    drawOfferModal.classList.add('hidden');
+    Net.respondDraw(false);
+  });
+  drawAcceptBtn.addEventListener('click', () => {
+    drawOfferModal.classList.add('hidden');
+    Net.respondDraw(true);
+  });
 
   // Blocks board interaction and hides the current board state until the
   // incoming player confirms they have the device — this is what keeps
@@ -840,6 +885,7 @@
     renderTrays();
     renderNameplates();
     renderPremoves();
+    onlineControlsBox.classList.toggle('hidden', !(mode === 'online' && stage === 'playing'));
   }
 
   function pieceInCheckSquare() {
@@ -1025,20 +1071,29 @@
     stage = 'over';
     const go = engine.gameOver;
     let msg, result;
-    if (go.reason === 'checkmate') {
+    if (go.result !== 'draw') {
+      // Bot/hotseat games only ever reach this branch via 'checkmate' — a
+      // human resigning, timing out, or disconnecting are all online-only
+      // concepts with no local-engine equivalent. Named here so all four
+      // get sensible wording instead of resignation/timeout/abandonment
+      // silently falling into the (wrong — those aren't draws) else branch
+      // below.
       const winner = go.result === 'white_wins' ? HUMAN : BOT;
+      const reasonPhrase = {
+        checkmate: 'Checkmate', resignation: 'Resignation', timeout: 'Timeout', abandonment: 'Opponent left',
+      }[go.reason] || 'Game over';
       if (mode === 'hotseat') {
-        msg = `Checkmate — ${winner === HUMAN ? 'White' : 'Black'} wins!`;
+        msg = `${reasonPhrase} — ${winner === HUMAN ? 'White' : 'Black'} wins!`;
       } else if (mode === 'online') {
-        msg = winner === meColor ? 'Checkmate — you win!' : 'Checkmate — you lose.';
+        msg = winner === meColor ? `${reasonPhrase} — you win!` : `${reasonPhrase} — you lose.`;
       } else {
-        msg = winner === HUMAN ? 'Checkmate — you win!' : 'Checkmate — the bot wins.';
+        msg = winner === HUMAN ? `${reasonPhrase} — you win!` : `${reasonPhrase} — the bot wins.`;
       }
       result = winner === HUMAN ? 'win' : 'loss';
     } else {
       const reasonText = {
         stalemate: 'Stalemate', fifty_move: '50-move rule', threefold_repetition: 'Threefold repetition',
-        insufficient_material: 'Insufficient material',
+        insufficient_material: 'Insufficient material', draw_agreement: 'Agreed draw',
       }[go.reason] || 'Draw';
       msg = `Draw — ${reasonText}.`;
       result = 'draw';
@@ -1374,6 +1429,8 @@
 
   newGameBtn.addEventListener('click', () => {
     if (mode === 'online') Net.leaveRoom();
+    resignConfirmModal.classList.add('hidden');
+    drawOfferModal.classList.add('hidden');
     openModePicker();
   });
 

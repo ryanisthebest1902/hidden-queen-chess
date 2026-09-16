@@ -42,6 +42,13 @@
   </div>
 
   <div class="side-panel">
+    <div class="panel-box hidden" id="online-controls-box">
+      <h3>Game controls</h3>
+      <div class="online-controls">
+        <button id="offer-draw-btn">Offer Draw</button>
+        <button class="danger" id="resign-btn">Resign</button>
+      </div>
+    </div>
     <div class="panel-box" id="premove-panel-box">
       <h3>Premoves <span id="premove-count"></span></h3>
       <div id="premove-list" class="premove-list"></div>
@@ -167,6 +174,30 @@
     <p id="online-status-message"></p>
     <div class="modal-actions">
       <button id="online-status-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resign confirmation -->
+<div class="modal-overlay hidden" id="resign-confirm-modal">
+  <div class="modal-box">
+    <h2>Resign this game?</h2>
+    <p>Your opponent will win. This can't be undone.</p>
+    <div class="modal-actions">
+      <button id="resign-cancel-btn">Cancel</button>
+      <button class="danger" id="resign-confirm-btn">Resign</button>
+    </div>
+  </div>
+</div>
+
+<!-- Draw offer received from opponent -->
+<div class="modal-overlay hidden" id="draw-offer-modal">
+  <div class="modal-box">
+    <h2>Draw offer</h2>
+    <p>Your opponent is offering a draw.</p>
+    <div class="modal-actions">
+      <button id="draw-decline-btn">Decline</button>
+      <button class="primary" id="draw-accept-btn">Accept</button>
     </div>
   </div>
 </div>

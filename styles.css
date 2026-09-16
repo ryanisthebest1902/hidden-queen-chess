@@ -163,6 +163,8 @@ main {
   padding: 10px 12px;
 }
 .panel-box h3 { margin: 0 0 8px 0; font-size: 0.95em; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.online-controls { display: flex; gap: 8px; }
+.online-controls button { flex: 1; }
 
 #history-list {
   max-height: 220px;

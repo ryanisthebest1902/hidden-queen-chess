@@ -173,6 +173,11 @@
     });
   }
 
+  function resign() { connectSocket().emit('resign', { gameId: myGameId }); }
+  function offerDraw() { connectSocket().emit('offerDraw', { gameId: myGameId }); }
+  function respondDraw(accept) { connectSocket().emit('respondDraw', { gameId: myGameId, accept }); }
+  function onDrawOffered(cb) { connectSocket().on('drawOffered', cb); }
+
   function onGameStart(cb) { connectSocket().on('gameStart', cb); }
   // Converts the server's algebraic {from,to,promotion,forcedReveal} into
   // the same shape applyRemoteMove expects (square indices), so callers
@@ -217,6 +222,7 @@
     leaveRoom, currentColor, currentOpponentName,
     onLeaderboardUpdate, watchLeaderboard, unwatchLeaderboard,
     signup, login, logout, currentUser, findMatch, cancelMatch,
+    resign, offerDraw, respondDraw, onDrawOffered,
     applyRemoteMove, // re-exported so ui.js doesn't need a second global reference
   };
   root.HiddenQueenNet = ServerNetExports;
