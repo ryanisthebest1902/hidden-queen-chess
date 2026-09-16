@@ -46,6 +46,8 @@ const {
 } = cluster;
 
 const PORT = process.env.PORT || 8080;
+const LEADERBOARD_PUSH_SIZE = 10; // "Top 10 scores, updating for everyone"
+const leaderboardRoom = (timeClass) => 'leaderboard:' + timeClass;
 const SETUP_TIMEOUT_MS = 30000;
 const LAG_GRACE_MS = 1500; // small, symmetric clock grace for message transit time (spec section 2/10)
 const HOUSEKEEPING_INTERVAL_MS = 1000; // drives clock-sync broadcasts + setup-timeout + disconnect-grace checks
@@ -314,6 +316,11 @@ async function persistCompletedGame(room, result, reason) {
     if (ratingResult) {
       io.to(room.sockets.w).emit('ratingUpdate', { timeClass: ratingResult.timeClass, before: Math.round(ratingResult.white.before), after: Math.round(ratingResult.white.after) });
       io.to(room.sockets.b).emit('ratingUpdate', { timeClass: ratingResult.timeClass, before: Math.round(ratingResult.black.before), after: Math.round(ratingResult.black.after) });
+      // Push the fresh top-10 to everyone currently watching this time
+      // class's leaderboard — this is what makes it "live" rather than a
+      // plain fetch-on-load list (see watchLeaderboard above).
+      const leaderboard = await getLeaderboard(ratingResult.timeClass, LEADERBOARD_PUSH_SIZE);
+      io.to(leaderboardRoom(ratingResult.timeClass)).emit('leaderboardUpdate', { timeClass: ratingResult.timeClass, leaderboard });
     }
   } catch (err) {
     console.error('failed to persist completed game', err);
@@ -572,6 +579,28 @@ io.on('connection', (socket) => {
     await dequeuePlayerBySocketId(socket.id);
     await clearBusy(socket.id).catch(() => {});
     socket.data.queuedTimeControl = null;
+  });
+
+  // Live leaderboard: a client joins a Socket.IO room per time class and
+  // gets pushed a fresh top-N the instant any rated game finishes (see
+  // persistCompletedGame) — no polling, no manual refresh. Works across
+  // instances via the Redis adapter like every other room-scoped emit
+  // here. No login required to watch (unlike matchmaking) since reading a
+  // public leaderboard isn't a sensitive action.
+  socket.on('watchLeaderboard', async ({ timeClass } = {}) => {
+    if (!['bullet', 'blitz', 'rapid'].includes(timeClass)) return;
+    socket.join(leaderboardRoom(timeClass));
+    try {
+      const leaderboard = await getLeaderboard(timeClass, LEADERBOARD_PUSH_SIZE);
+      socket.emit('leaderboardUpdate', { timeClass, leaderboard });
+    } catch (err) {
+      console.error('leaderboard watch snapshot failed', err);
+    }
+  });
+
+  socket.on('unwatchLeaderboard', ({ timeClass } = {}) => {
+    if (!['bullet', 'blitz', 'rapid'].includes(timeClass)) return;
+    socket.leave(leaderboardRoom(timeClass));
   });
 
   socket.on('submitHiddenQueen', async ({ gameId, square }) => {

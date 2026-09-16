@@ -28,11 +28,30 @@
   let myResumeToken = null;
   let myOpponentName = null;
 
+  // ---- Accounts (Phase 2/3) — needed for rated matchmaking + the
+  // leaderboard; direct-challenge play never required this. Token/user are
+  // cached in localStorage so a login survives a reload; the socket is torn
+  // down and lazily reconnected on any auth change so its handshake auth
+  // picks up the new token (a socket already open when you log in was
+  // handshake-authenticated as anonymous, and Socket.IO has no way to
+  // re-authenticate a live connection).
+  const AUTH_STORAGE_KEY = 'hqc_auth';
+  let authToken = null;
+  let authUser = null; // { id, displayName } | null
+  (function loadStoredAuth() {
+    try {
+      const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.token && parsed.user) { authToken = parsed.token; authUser = parsed.user; }
+    } catch (e) { /* localStorage unavailable or corrupt — just stay logged out */ }
+  })();
+
   function isConfigured() { return true; } // no manual setup step for the player anymore
 
   function connectSocket() {
     if (socket) return socket;
-    socket = io(SERVER_URL);
+    socket = io(SERVER_URL, { auth: (cb) => cb({ token: authToken }) });
     // Socket.IO reconnects automatically with backoff on its own; this
     // just re-attaches to the same game once that succeeds. See spec
     // section 7 / Phase 4 — this is the client half of the resumeToken
@@ -42,6 +61,35 @@
     });
     return socket;
   }
+
+  async function apiPost(path, body) {
+    const res = await fetch(SERVER_URL + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return res.json();
+  }
+
+  async function signup({ email, password, displayName }) {
+    const result = await apiPost('/api/signup', { email, password, displayName });
+    if (result.ok) setAuth(result.token, result.user);
+    return result;
+  }
+  async function login({ email, password }) {
+    const result = await apiPost('/api/login', { email, password });
+    if (result.ok) setAuth(result.token, result.user);
+    return result;
+  }
+  function setAuth(token, user) {
+    authToken = token; authUser = user;
+    try { localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ token, user })); } catch (e) {}
+    if (socket) { socket.removeAllListeners(); socket.disconnect(); socket = null; }
+  }
+  function logout() {
+    authToken = null; authUser = null;
+    try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (e) {}
+    if (socket) { socket.removeAllListeners(); socket.disconnect(); socket = null; }
+  }
+  function currentUser() { return authUser; }
 
   function onceConnected(fn) {
     const s = connectSocket();
@@ -94,6 +142,24 @@
     });
   }
 
+  // Rated matchmaking — requires login (server rejects with 'login_required'
+  // otherwise). Resolves once queued (so the UI can show a "waiting" state
+  // with a cancel button); the actual pairing arrives later via
+  // callbacks.onMatched, exactly like hostGame's opponent-joins moment.
+  function findMatch(timeControl, callbacks) {
+    return new Promise((resolve, reject) => {
+      if (!authUser) { reject(new Error('login_required')); return; }
+      registerMatchListeners(callbacks);
+      onceConnected((s) => {
+        s.once('queueJoined', () => resolve());
+        s.once('queueRejected', (payload) => reject(new Error(payload.reason || 'rejected')));
+        s.emit('joinQueue', { timeControl });
+      });
+      connectSocket().once('connect_error', reject);
+    });
+  }
+  function cancelMatch() { if (socket) socket.emit('cancelQueue'); }
+
   function submitSetupPick(squareIdx) {
     connectSocket().emit('submitHiddenQueen', { gameId: myGameId, square: algebraicFromIdx(squareIdx) });
   }
@@ -125,6 +191,18 @@
   function onMoveRejected(cb) { connectSocket().on('moveRejected', cb); }
   function onGameOver(cb) { connectSocket().on('gameOver', cb); }
 
+  // Live leaderboard — independent of being in a game; connects lazily
+  // like everything else here. Only one time class is ever watched at a
+  // time (switching tabs unwatches the old one first), so a single
+  // listener replaced on each registration is enough — no accumulation.
+  function onLeaderboardUpdate(cb) {
+    const s = connectSocket();
+    s.off('leaderboardUpdate');
+    s.on('leaderboardUpdate', (payload) => cb(payload));
+  }
+  function watchLeaderboard(timeClass) { onceConnected((s) => s.emit('watchLeaderboard', { timeClass })); }
+  function unwatchLeaderboard(timeClass) { if (socket) socket.emit('unwatchLeaderboard', { timeClass }); }
+
   function leaveRoom() {
     if (socket) { socket.removeAllListeners(); socket.disconnect(); socket = null; }
     myColor = null; myGameId = null; myResumeToken = null; myOpponentName = null;
@@ -137,6 +215,8 @@
     isConfigured, hostGame, joinGame, submitSetupPick, sendMove,
     onGameStart, onMoveApplied, onMoveRejected, onGameOver,
     leaveRoom, currentColor, currentOpponentName,
+    onLeaderboardUpdate, watchLeaderboard, unwatchLeaderboard,
+    signup, login, logout, currentUser, findMatch, cancelMatch,
     applyRemoteMove, // re-exported so ui.js doesn't need a second global reference
   };
   root.HiddenQueenNet = ServerNetExports;

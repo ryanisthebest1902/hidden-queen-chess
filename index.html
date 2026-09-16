@@ -11,6 +11,9 @@
   <h1><span class="crown">♛</span> Hidden Queen Chess</h1>
   <div class="header-controls">
     <span id="rating-summary" class="rating-summary"></span>
+    <span id="auth-status" class="auth-status hidden"></span>
+    <button id="auth-btn">Log In</button>
+    <button id="leaderboard-btn">Leaderboard</button>
     <button id="history-btn">Match History</button>
     <button id="new-game-btn">New Game</button>
   </div>
@@ -106,9 +109,38 @@
         <span class="mode-choice-title">Join a game</span>
         <span class="mode-choice-sub">Enter a friend's room code</span>
       </button>
+      <button class="mode-choice-btn" id="online-match-btn">
+        <span class="mode-choice-title">Find a match</span>
+        <span class="mode-choice-sub">Rated matchmaking by rating — requires an account</span>
+      </button>
     </div>
     <div class="modal-actions">
       <button id="online-back-btn">Back</button>
+    </div>
+  </div>
+</div>
+
+<!-- Matchmaking: time control picker -->
+<div class="modal-overlay hidden" id="match-picker-modal">
+  <div class="modal-box">
+    <h2>Find a match</h2>
+    <p>Pick a time class — you'll be matched against someone near your rating.</p>
+    <div class="mode-choices">
+      <button class="mode-choice-btn" id="match-bullet-btn">
+        <span class="mode-choice-title">Bullet</span>
+        <span class="mode-choice-sub">2+0</span>
+      </button>
+      <button class="mode-choice-btn" id="match-blitz-btn">
+        <span class="mode-choice-title">Blitz</span>
+        <span class="mode-choice-sub">5+0</span>
+      </button>
+      <button class="mode-choice-btn" id="match-rapid-btn">
+        <span class="mode-choice-title">Rapid</span>
+        <span class="mode-choice-sub">15+0</span>
+      </button>
+    </div>
+    <div class="modal-actions">
+      <button id="match-picker-back-btn">Back</button>
     </div>
   </div>
 </div>
@@ -135,6 +167,40 @@
     <p id="online-status-message"></p>
     <div class="modal-actions">
       <button id="online-status-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Account: log in / sign up (needed for rated matchmaking + the leaderboard) -->
+<div class="modal-overlay hidden" id="auth-modal">
+  <div class="modal-box">
+    <h2 id="auth-modal-heading">Log in</h2>
+    <input type="email" id="auth-email-input" class="room-code-input auth-input" placeholder="Email" autocomplete="email">
+    <input type="text" id="auth-name-input" class="room-code-input auth-input hidden" placeholder="Display name" autocomplete="nickname" maxlength="24">
+    <input type="password" id="auth-password-input" class="room-code-input auth-input" placeholder="Password" autocomplete="current-password">
+    <p id="auth-error" class="room-error hidden"></p>
+    <div class="modal-actions" style="justify-content: space-between;">
+      <button id="auth-switch-btn">Need an account? Sign up</button>
+      <div>
+        <button id="auth-cancel-btn">Cancel</button>
+        <button class="primary" id="auth-submit-btn">Log in</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Live leaderboard -->
+<div class="modal-overlay hidden" id="leaderboard-modal">
+  <div class="modal-box wide">
+    <h2>Leaderboard</h2>
+    <div class="leaderboard-tabs">
+      <button class="leaderboard-tab-btn active" id="leaderboard-tab-bullet" data-time-class="bullet">Bullet</button>
+      <button class="leaderboard-tab-btn" id="leaderboard-tab-blitz" data-time-class="blitz">Blitz</button>
+      <button class="leaderboard-tab-btn" id="leaderboard-tab-rapid" data-time-class="rapid">Rapid</button>
+    </div>
+    <div id="leaderboard-list" class="leaderboard-list"></div>
+    <div class="modal-actions">
+      <button class="primary" id="leaderboard-close-btn">Close</button>
     </div>
   </div>
 </div>

@@ -69,6 +69,31 @@
   const onlineStatusMessage = document.getElementById('online-status-message');
   const onlineStatusCancelBtn = document.getElementById('online-status-cancel-btn');
 
+  const onlineMatchBtn = document.getElementById('online-match-btn');
+  const matchPickerModal = document.getElementById('match-picker-modal');
+  const matchPickerBackBtn = document.getElementById('match-picker-back-btn');
+  const matchBulletBtn = document.getElementById('match-bullet-btn');
+  const matchBlitzBtn = document.getElementById('match-blitz-btn');
+  const matchRapidBtn = document.getElementById('match-rapid-btn');
+
+  const authBtn = document.getElementById('auth-btn');
+  const authStatusEl = document.getElementById('auth-status');
+  const authModal = document.getElementById('auth-modal');
+  const authModalHeading = document.getElementById('auth-modal-heading');
+  const authEmailInput = document.getElementById('auth-email-input');
+  const authNameInput = document.getElementById('auth-name-input');
+  const authPasswordInput = document.getElementById('auth-password-input');
+  const authError = document.getElementById('auth-error');
+  const authSwitchBtn = document.getElementById('auth-switch-btn');
+  const authCancelBtn = document.getElementById('auth-cancel-btn');
+  const authSubmitBtn = document.getElementById('auth-submit-btn');
+
+  const leaderboardBtn = document.getElementById('leaderboard-btn');
+  const leaderboardModal = document.getElementById('leaderboard-modal');
+  const leaderboardListEl = document.getElementById('leaderboard-list');
+  const leaderboardCloseBtn = document.getElementById('leaderboard-close-btn');
+  const leaderboardTabBtns = [...document.querySelectorAll('.leaderboard-tab-btn')];
+
   const botPickerModal = document.getElementById('bot-picker-modal');
   const botRosterListEl = document.getElementById('bot-roster-list');
   const pickerYourRatingEl = document.getElementById('picker-your-rating');
@@ -120,6 +145,9 @@
   // ---- online mode state ----
   let onlineMoveState = null; // null | 'sending' — blocks re-clicking while a move is in flight
   let onlineMySetupDone = false;
+  let onlineStatusContext = null; // 'host' | 'queue' — which action onlineStatusCancelBtn should undo
+  let authMode = 'login'; // 'login' | 'signup' — which form auth-modal is currently showing
+  let leaderboardTimeClass = null; // currently-watched tab while leaderboard-modal is open, else null
 
   // ---------- Rating display ----------
 
@@ -202,6 +230,7 @@
 
   onlineHostBtn.addEventListener('click', () => {
     onlinePickerModal.classList.add('hidden');
+    onlineStatusContext = 'host';
     onlineStatusHeading.textContent = 'Creating a challenge';
     onlineRoomCodeDisplay.classList.add('hidden');
     onlineStatusMessage.textContent = 'Setting up your game…';
@@ -227,7 +256,9 @@
   });
 
   onlineStatusCancelBtn.addEventListener('click', () => {
-    Net.leaveRoom();
+    if (onlineStatusContext === 'queue') Net.cancelMatch();
+    else Net.leaveRoom();
+    onlineStatusContext = null;
     onlineStatusModal.classList.add('hidden');
     openModePicker();
   });
@@ -261,6 +292,205 @@
         : 'Could not join — try again in a moment.';
       joinRoomError.classList.remove('hidden');
     });
+  });
+
+  onlineMatchBtn.addEventListener('click', () => {
+    if (!Net.currentUser()) {
+      onlinePickerModal.classList.add('hidden');
+      showToast('Log in first to use rated matchmaking.');
+      openAuthModal('login');
+      return;
+    }
+    onlinePickerModal.classList.add('hidden');
+    matchPickerModal.classList.remove('hidden');
+  });
+
+  matchPickerBackBtn.addEventListener('click', () => {
+    matchPickerModal.classList.add('hidden');
+    onlinePickerModal.classList.remove('hidden');
+  });
+
+  function startMatchmaking(timeControl) {
+    matchPickerModal.classList.add('hidden');
+    onlineStatusContext = 'queue';
+    onlineStatusHeading.textContent = 'Finding a match';
+    onlineRoomCodeDisplay.classList.add('hidden');
+    onlineStatusMessage.textContent = 'Waiting for an opponent near your rating…';
+    onlineStatusModal.classList.remove('hidden');
+
+    Net.findMatch(timeControl, {
+      onMatched: () => {
+        onlineStatusContext = null;
+        onlineStatusModal.classList.add('hidden');
+        beginOnlineGame();
+      },
+      onOpponentDisconnected: () => {
+        if (mode === 'online') showToast('Your opponent disconnected.');
+      },
+    }).catch((err) => {
+      onlineStatusContext = null;
+      onlineStatusModal.classList.add('hidden');
+      showToast(err.message === 'login_required' ? 'Log in first to use rated matchmaking.' : 'Could not join the queue — try again in a moment.');
+      openModePicker();
+    });
+  }
+  matchBulletBtn.addEventListener('click', () => startMatchmaking('2+0'));
+  matchBlitzBtn.addEventListener('click', () => startMatchmaking('5+0'));
+  matchRapidBtn.addEventListener('click', () => startMatchmaking('15+0'));
+
+  // ---------- Accounts (needed for rated matchmaking + the leaderboard) ----------
+
+  function refreshAuthStatus() {
+    const user = Net.currentUser();
+    if (user) {
+      authStatusEl.textContent = 'Logged in as ' + user.displayName;
+      authStatusEl.classList.remove('hidden');
+      authBtn.textContent = 'Log Out';
+    } else {
+      authStatusEl.classList.add('hidden');
+      authBtn.textContent = 'Log In';
+    }
+  }
+  refreshAuthStatus();
+
+  function applyAuthMode() {
+    if (authMode === 'login') {
+      authModalHeading.textContent = 'Log in';
+      authNameInput.classList.add('hidden');
+      authSwitchBtn.textContent = 'Need an account? Sign up';
+      authSubmitBtn.textContent = 'Log in';
+    } else {
+      authModalHeading.textContent = 'Sign up';
+      authNameInput.classList.remove('hidden');
+      authSwitchBtn.textContent = 'Have an account? Log in';
+      authSubmitBtn.textContent = 'Sign up';
+    }
+  }
+
+  function openAuthModal(startMode) {
+    authMode = startMode || 'login';
+    applyAuthMode();
+    authError.classList.add('hidden');
+    authEmailInput.value = '';
+    authNameInput.value = '';
+    authPasswordInput.value = '';
+    authModal.classList.remove('hidden');
+  }
+
+  function authErrorMessage(reason) {
+    switch (reason) {
+      case 'email_taken': return 'That email is already registered — try logging in instead.';
+      case 'weak_password': return 'Password must be at least 8 characters.';
+      case 'invalid_email': return 'Enter a valid email address.';
+      case 'invalid_credentials': return 'Incorrect email or password.';
+      case 'rate_limited': return 'Too many attempts — wait a bit and try again.';
+      case 'server_not_configured': return 'Accounts are not available right now.';
+      default: return 'Something went wrong — try again.';
+    }
+  }
+
+  authBtn.addEventListener('click', () => {
+    if (Net.currentUser()) {
+      Net.logout();
+      refreshAuthStatus();
+      showToast('Logged out.');
+    } else {
+      openAuthModal('login');
+    }
+  });
+
+  authSwitchBtn.addEventListener('click', () => {
+    authMode = authMode === 'login' ? 'signup' : 'login';
+    applyAuthMode();
+    authError.classList.add('hidden');
+  });
+
+  authCancelBtn.addEventListener('click', () => {
+    authModal.classList.add('hidden');
+  });
+
+  authSubmitBtn.addEventListener('click', async () => {
+    const email = authEmailInput.value.trim();
+    const password = authPasswordInput.value;
+    const displayName = authNameInput.value.trim();
+    authError.classList.add('hidden');
+    authSubmitBtn.disabled = true;
+    try {
+      const result = authMode === 'login'
+        ? await Net.login({ email, password })
+        : await Net.signup({ email, password, displayName });
+      if (result.ok) {
+        authModal.classList.add('hidden');
+        refreshAuthStatus();
+        showToast(authMode === 'login' ? `Welcome back, ${result.user.displayName}!` : `Welcome, ${result.user.displayName}!`);
+      } else {
+        authError.textContent = authErrorMessage(result.reason);
+        authError.classList.remove('hidden');
+      }
+    } catch (e) {
+      authError.textContent = 'Could not reach the server — try again in a moment.';
+      authError.classList.remove('hidden');
+    } finally {
+      authSubmitBtn.disabled = false;
+    }
+  });
+
+  // ---------- Live leaderboard ----------
+
+  function renderLeaderboard(entries) {
+    leaderboardListEl.innerHTML = '';
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'leaderboard-empty';
+      empty.textContent = 'No rated games yet — be the first!';
+      leaderboardListEl.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry, i) => {
+      const row = document.createElement('div');
+      row.className = 'leaderboard-row';
+      const rank = document.createElement('span');
+      rank.className = 'leaderboard-rank';
+      rank.textContent = String(i + 1);
+      const name = document.createElement('span');
+      name.className = 'leaderboard-name';
+      name.textContent = entry.displayName; // textContent, not innerHTML — display names are user-chosen at signup
+      const games = document.createElement('span');
+      games.className = 'leaderboard-games';
+      games.textContent = entry.gamesPlayed + (entry.gamesPlayed === 1 ? ' game' : ' games');
+      const rating = document.createElement('span');
+      rating.className = 'leaderboard-rating';
+      rating.textContent = entry.rating;
+      row.append(rank, name, games, rating);
+      leaderboardListEl.appendChild(row);
+    });
+  }
+
+  function switchLeaderboardTab(timeClass) {
+    if (leaderboardTimeClass) Net.unwatchLeaderboard(leaderboardTimeClass);
+    leaderboardTimeClass = timeClass;
+    leaderboardTabBtns.forEach((btn) => btn.classList.toggle('active', btn.dataset.timeClass === timeClass));
+    leaderboardListEl.innerHTML = '<div class="leaderboard-loading">Loading…</div>';
+    Net.watchLeaderboard(timeClass);
+  }
+
+  leaderboardBtn.addEventListener('click', () => {
+    leaderboardModal.classList.remove('hidden');
+    Net.onLeaderboardUpdate((payload) => {
+      if (payload.timeClass !== leaderboardTimeClass) return; // stale — a tab switch already moved on
+      renderLeaderboard(payload.leaderboard);
+    });
+    switchLeaderboardTab('bullet');
+  });
+
+  leaderboardCloseBtn.addEventListener('click', () => {
+    if (leaderboardTimeClass) Net.unwatchLeaderboard(leaderboardTimeClass);
+    leaderboardTimeClass = null;
+    leaderboardModal.classList.add('hidden');
+  });
+
+  leaderboardTabBtns.forEach((btn) => {
+    btn.addEventListener('click', () => switchLeaderboardTab(btn.dataset.timeClass));
   });
 
   function beginOnlineGame() {

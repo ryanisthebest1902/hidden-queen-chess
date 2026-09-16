@@ -414,3 +414,25 @@ button.mode-choice-btn.primary .mode-choice-sub { color: #1b1b1f; opacity: 0.75;
 }
 .room-error { color: #ff8a80; font-size: 0.9em; margin-top: 6px; }
 .online-indicator { color: var(--text-dim); font-style: italic; }
+
+/* ---------- Accounts ---------- */
+.auth-status { font-size: 0.9em; color: var(--text-dim); }
+.auth-input {
+  font-family: inherit; font-size: 1em; letter-spacing: normal; text-align: left; text-transform: none;
+}
+.auth-input + .auth-input { margin-top: 8px; }
+
+/* ---------- Leaderboard ---------- */
+.leaderboard-tabs { display: flex; gap: 6px; margin: 14px 0 10px; }
+.leaderboard-tab-btn { flex: 1; padding: 8px; font-size: 0.9em; }
+.leaderboard-tab-btn.active { background: var(--accent); color: #1b1b1f; border-color: var(--accent); }
+.leaderboard-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.leaderboard-row {
+  display: grid; grid-template-columns: 2em 1fr auto auto; align-items: center; gap: 10px;
+  padding: 8px 10px; background: #2f2f36; border-radius: 6px;
+}
+.leaderboard-rank { color: var(--text-dim); font-weight: 700; }
+.leaderboard-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leaderboard-games { color: var(--text-dim); font-size: 0.85em; }
+.leaderboard-rating { color: var(--accent); font-weight: 700; font-family: 'Consolas', monospace; }
+.leaderboard-empty, .leaderboard-loading { color: var(--text-dim); text-align: center; padding: 20px; }
