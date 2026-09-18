@@ -156,6 +156,11 @@
   let onlineMoveState = null; // null | 'sending' — blocks re-clicking while a move is in flight
   let onlineMySetupDone = false;
   let onlineStatusContext = null; // 'host' | 'queue' — which action onlineStatusCancelBtn should undo
+  // Set true ONLY by Net.onGameOver (see updateStatusAndTurn's isOverForDisplay).
+  // Deliberately independent of `stage` — stage flips to 'over' only INSIDE
+  // the branch this flag gates, so gating on stage itself would be circular
+  // (it could never become true on the very call that's supposed to set it).
+  let onlineServerConfirmedOver = false;
   let authMode = 'login'; // 'login' | 'signup' — which form auth-modal is currently showing
   let leaderboardTimeClass = null; // currently-watched tab while leaderboard-modal is open, else null
 
@@ -517,6 +522,7 @@
     premoveQueue = [];
     onlineMoveState = null;
     onlineMySetupDone = false;
+    onlineServerConfirmedOver = false;
     premovePanelBox.classList.add('hidden'); // no local "opponent thinking" window to premove into — see section 8 scoping note
     historyList.innerHTML = '';
     trayByHuman.innerHTML = '';
@@ -532,6 +538,16 @@
     // like the old Firebase guest always did (see engine.js's
     // applyRemoteMove and server-netplay.js's onMoveApplied).
     Net.onMoveApplied(({ remoteMoveMsg }) => {
+      // engine.makeMove() refuses to run at all once engine.gameOver is
+      // set (returns {ok:false, reason:'game_over'} immediately) — so a
+      // wrongly-concluded local checkmate/stalemate (see
+      // updateStatusAndTurn's isOverForDisplay comment) wouldn't just
+      // mis-display, it would silently block every future move from ever
+      // applying, freezing this client's board forever. The server
+      // sending another move at all is proof it doesn't consider the game
+      // over (stage would already be 'over' via Net.onGameOver otherwise),
+      // so that stale conclusion is safe to clear right before replaying.
+      if (stage !== 'over' && engine.gameOver) engine.gameOver = null;
       const result = Net.applyRemoteMove(engine, remoteMoveMsg);
       onlineMoveState = null;
       if (result.ok) {
@@ -585,18 +601,20 @@
       // evaluating whether the OPPONENT has legal moves, since that
       // depends on their OWN true piece powers — which this side may not
       // fully know if the opponent still has an unrevealed hidden queen
-      // providing an escape this local engine can't see. Trust the
-      // server's answer. Only actually overrides anything for reasons a
-      // local engine could never detect on its own (resignation, timeout,
-      // abandonment) — checkmate/stalemate/etc. were already set correctly
-      // by the local replay above, via the identical detection logic the
-      // server also runs, so this is a no-op for those.
-      if (!engine.gameOver) {
-        engine.gameOver = {
-          result: info.result === 'white' ? 'white_wins' : info.result === 'black' ? 'black_wins' : 'draw',
-          reason: info.reason,
-        };
-      }
+      // providing an escape this local engine can't see. Always trust the
+      // server's answer over whatever engine.gameOver already holds — a
+      // real case: White captures with check, White's local engine (not
+      // knowing Black's rook is secretly a queen) wrongly calls it
+      // checkmate, Black legally escapes and the server keeps the game
+      // going; if the game genuinely ends some other way afterward without
+      // engine.gameOver ever having been cleared in between, a stale
+      // "checkmate" would silently win out over this real result unless
+      // this unconditionally overwrites it every time.
+      engine.gameOver = {
+        result: info.result === 'white' ? 'white_wins' : info.result === 'black' ? 'black_wins' : 'draw',
+        reason: info.reason,
+      };
+      onlineServerConfirmedOver = true; // the only thing updateStatusAndTurn's isOverForDisplay trusts for online mode
       // updateStatusAndTurn() sets stage = 'over' — must run before render(),
       // since render() reads stage to decide whether Game Controls (resign/
       // draw) should still be showing. Without this, resigning or an
@@ -1043,7 +1061,24 @@
 
   function updateStatusAndTurn() {
     const meColor = mode === 'online' ? Net.currentColor() : HUMAN;
-    if (!engine.gameOver) {
+    // Online: engine.gameOver is set by this client's own LOCAL replay
+    // (applyRemoteMove -> engine.makeMove), and that local checkmate/
+    // stalemate detection can be flat-out wrong — it's asking "does the
+    // OPPONENT have a legal escape," which depends on their true piece
+    // powers, and this client was never told if they still have an
+    // unrevealed hidden queen. A real case: White captures on g7 with
+    // check: White's own engine, not knowing Black's rook is secretly a
+    // queen, sees no escape and calls it checkmate; Black's engine (which
+    // does know) correctly finds Qxg7 back and the server accepts it,
+    // proving White's "checkmate" was never real. So online-mode game-over
+    // is gated on onlineServerConfirmedOver, only ever set by the server's
+    // own gameOver event (see Net.onGameOver in beginOnlineGame) — never by
+    // this client's own possibly-wrong local conclusion. NOT gated on
+    // `stage`: stage only flips to 'over' a few lines below, inside the
+    // branch this very check guards, so gating on stage would be circular
+    // and could never fire.
+    const isOverForDisplay = mode === 'online' ? onlineServerConfirmedOver : !!engine.gameOver;
+    if (!isOverForDisplay) {
       if (mode === 'hotseat') {
         turnIndicator.innerHTML = `Turn: <strong>${engine.turn === WHITE ? 'White' : 'Black'}</strong>`;
       } else if (mode === 'online') {
