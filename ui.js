@@ -152,6 +152,90 @@
   let ratingRecordedThisGame = false;
   let premoveQueue = []; // [{from, to, promotion, intendedCapture}], see section 8 (bot mode only)
 
+  // ---------- Sound effects ----------
+  // Synthesized with the Web Audio API — no audio files to host or load.
+  // The AudioContext is created lazily inside a user gesture (browsers
+  // block audio before the first click/tap), and every call is wrapped so
+  // a browser without audio support can never break a move.
+  let audioCtx = null;
+  let soundOn = true;
+  try { soundOn = localStorage.getItem('hqc_sound') !== 'off'; } catch (e) { /* storage blocked — default on */ }
+  let endSoundEngine = null; // engine the game-over sound last played for (a new game gets a new engine)
+
+  function getAudio() {
+    if (!soundOn) return null;
+    try {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        audioCtx = new AC();
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+  function tone(ctx, { freq, toFreq, start = 0, dur = 0.12, type = 'sine', vol = 0.2 }) {
+    const t0 = ctx.currentTime + start;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (toFreq) osc.frequency.exponentialRampToValueAtTime(toFreq, t0 + dur);
+    gain.gain.setValueAtTime(vol, t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.02);
+  }
+  function noiseBurst(ctx, { start = 0, dur = 0.08, vol = 0.2, cutoff = 1500 }) {
+    const t0 = ctx.currentTime + start;
+    const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ctx.createBufferSource();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    filter.type = 'lowpass'; filter.frequency.value = cutoff;
+    gain.gain.value = vol;
+    src.buffer = buf;
+    src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+    src.start(t0);
+  }
+  // rec is an engine move record; only its public fields are used, and
+  // they're all things both players already see on the board.
+  function playMoveSound(rec) {
+    const ctx = getAudio();
+    if (!ctx || !rec) return;
+    try {
+      if (rec.capture) {
+        noiseBurst(ctx, { dur: 0.14, vol: 0.35, cutoff: 1100 });
+        tone(ctx, { freq: 150, toFreq: 70, dur: 0.14, vol: 0.3 });
+      } else {
+        noiseBurst(ctx, { dur: 0.05, vol: 0.18, cutoff: 2200 });
+        tone(ctx, { freq: 260, toFreq: 160, dur: 0.07, vol: 0.18 });
+      }
+      if (rec.isCastle) { noiseBurst(ctx, { start: 0.09, dur: 0.05, vol: 0.18, cutoff: 2200 }); }
+      if (rec.promotion) { tone(ctx, { freq: 500, toFreq: 1000, start: 0.1, dur: 0.2, type: 'triangle', vol: 0.15 }); }
+      if (rec.wasHiddenAndRevealedThisMove || rec.capturedWasHiddenQueen) {
+        // The signature moment — a rising sweep when a hidden queen is revealed.
+        tone(ctx, { freq: 300, toFreq: 1100, start: 0.12, dur: 0.4, type: 'sawtooth', vol: 0.12 });
+      }
+      if (engine && !engine.gameOver && engine.isInCheck(engine.turn)) {
+        tone(ctx, { freq: 660, start: 0.14, dur: 0.1, type: 'triangle', vol: 0.18 });
+        tone(ctx, { freq: 880, start: 0.24, dur: 0.14, type: 'triangle', vol: 0.18 });
+      }
+    } catch (e) { /* audio must never break a move */ }
+  }
+  function playGameOverSound(outcome) { // 'win' | 'loss' | 'draw'
+    const ctx = getAudio();
+    if (!ctx) return;
+    try {
+      const notes = outcome === 'win' ? [523, 659, 784, 1047]
+        : outcome === 'loss' ? [392, 330, 262, 196] : [440, 440];
+      notes.forEach((freq, i) => tone(ctx, { freq, start: i * 0.14, dur: 0.3, type: 'triangle', vol: 0.2 }));
+    } catch (e) { /* ignore */ }
+  }
+
   // ---- online mode state ----
   let onlineMoveState = null; // null | 'sending' — blocks re-clicking while a move is in flight
   let onlineMySetupDone = false;
@@ -489,6 +573,19 @@
     Net.watchLeaderboard(timeClass);
   }
 
+  const soundBtn = document.getElementById('sound-btn');
+  function refreshSoundBtn() {
+    soundBtn.textContent = soundOn ? '🔊' : '🔇';
+    soundBtn.title = soundOn ? 'Sound on — click to mute' : 'Sound off — click to unmute';
+  }
+  refreshSoundBtn();
+  soundBtn.addEventListener('click', () => {
+    soundOn = !soundOn;
+    try { localStorage.setItem('hqc_sound', soundOn ? 'on' : 'off'); } catch (e) {}
+    refreshSoundBtn();
+    if (soundOn) playMoveSound({ capture: false }); // audible confirmation, and unlocks audio inside this click
+  });
+
   leaderboardBtn.addEventListener('click', () => {
     leaderboardModal.classList.remove('hidden');
     Net.onLeaderboardUpdate((payload) => {
@@ -552,6 +649,7 @@
       onlineMoveState = null;
       if (result.ok) {
         lastMoveSquares = { from: result.record.from, to: result.record.to };
+        playMoveSound(result.record);
         processOnlineRevealToasts(result.record);
       }
       // updateStatusAndTurn() before render() — see the identical comment
@@ -1136,6 +1234,14 @@
     statusBanner.textContent = msg;
     statusBanner.className = 'over';
     turnIndicator.textContent = 'Game over. Press New Game to play again.';
+    if (endSoundEngine !== engine) { // updateStatusAndTurn runs repeatedly once over — play the jingle once
+      endSoundEngine = engine;
+      // `result` above is relative to White (HUMAN), so it's wrong for an
+      // online Black player — work out the outcome from meColor instead.
+      // Hotseat has no "you", so a win for either side is a win.
+      const iWon = go.result === (meColor === WHITE ? 'white_wins' : 'black_wins');
+      playGameOverSound(go.result === 'draw' ? 'draw' : (mode === 'hotseat' || iWon ? 'win' : 'loss'));
+    }
 
     if (!ratingRecordedThisGame && selectedBot) {
       ratingRecordedThisGame = true;
@@ -1354,6 +1460,7 @@
     const rec = result.record;
     selected = null; legalTargets = [];
     lastMoveSquares = { from: rec.from, to: rec.to };
+    playMoveSound(rec);
 
     if (mode === 'hotseat') {
       // Reveal toasts are deferred to the moment the INCOMING player
@@ -1411,6 +1518,7 @@
       const result = engine.makeMove({ from: move.from, to: move.to, promotion: 'Q' });
       if (result.ok) {
         lastMoveSquares = { from: result.record.from, to: result.record.to };
+        playMoveSound(result.record);
         processRevealAndCaptureToasts(result.record);
       }
       render();

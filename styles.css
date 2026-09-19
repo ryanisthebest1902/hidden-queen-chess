@@ -128,7 +128,10 @@ main {
   background: transparent;
   border: 4px solid var(--target-dot);
 }
-.square.last-move { box-shadow: inset 0 0 0 3px rgba(255, 235, 59, 0.55); }
+.square.last-move {
+  box-shadow: inset 0 0 0 3px rgba(255, 235, 59, 0.7);
+  background-image: linear-gradient(rgba(255, 235, 59, 0.32), rgba(255, 235, 59, 0.32));
+}
 .square.in-check { box-shadow: inset 0 0 12px 4px var(--check-glow); }
 .square.setup-pickable { box-shadow: inset 0 0 0 3px rgba(212, 175, 55, 0.65); }
 
