@@ -188,7 +188,7 @@
   }
   // A band-passed noise burst with a fast (squared) decay is what sounds
   // like a wooden tap — plain noise or a pitched blip sounds like a beep.
-  function noiseBurst(ctx, { start = 0, dur = 0.08, vol = 0.2, cutoff = 1500 }) {
+  function noiseBurst(ctx, { start = 0, dur = 0.08, vol = 0.2, cutoff = 1500, q = 0.9 }) {
     const t0 = ctx.currentTime + start;
     const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -197,7 +197,7 @@
     const src = ctx.createBufferSource();
     const filter = ctx.createBiquadFilter();
     const gain = ctx.createGain();
-    filter.type = 'bandpass'; filter.frequency.value = cutoff; filter.Q.value = 0.9;
+    filter.type = 'bandpass'; filter.frequency.value = cutoff; filter.Q.value = q;
     gain.gain.value = vol;
     src.buffer = buf;
     src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
@@ -210,15 +210,22 @@
     if (!ctx || !rec) return;
     try {
       // Soft wooden "tap": short mid-range noise click + a quiet, fixed-pitch low thump.
+      // Deliberately NO pitched tone here: any sine with a pitch drop sounds like a
+      // bouncing ball. A real piece-on-board sound is a sharp click (top) plus a
+      // short dull thud (body), both just filtered noise.
       if (rec.capture) {
-        noiseBurst(ctx, { dur: 0.09, vol: 0.5, cutoff: 900 });
-        noiseBurst(ctx, { start: 0.045, dur: 0.07, vol: 0.3, cutoff: 1400 }); // second clack — a piece knocked off
-        tone(ctx, { freq: 120, toFreq: 90, dur: 0.1, vol: 0.14 });
+        noiseBurst(ctx, { dur: 0.03, vol: 0.7, cutoff: 3000, q: 1.2 });
+        noiseBurst(ctx, { dur: 0.09, vol: 0.9, cutoff: 450, q: 1.5 });
+        noiseBurst(ctx, { start: 0.07, dur: 0.03, vol: 0.5, cutoff: 2600, q: 1.2 }); // second clack — a piece knocked off
+        noiseBurst(ctx, { start: 0.07, dur: 0.07, vol: 0.6, cutoff: 500, q: 1.5 });
       } else {
-        noiseBurst(ctx, { dur: 0.055, vol: 0.4, cutoff: 1300 });
-        tone(ctx, { freq: 170, toFreq: 130, dur: 0.06, vol: 0.09 });
+        noiseBurst(ctx, { dur: 0.025, vol: 0.55, cutoff: 3000, q: 1.2 });
+        noiseBurst(ctx, { dur: 0.07, vol: 0.7, cutoff: 500, q: 1.5 });
       }
-      if (rec.isCastle) { noiseBurst(ctx, { start: 0.11, dur: 0.055, vol: 0.4, cutoff: 1300 }); }
+      if (rec.isCastle) {
+        noiseBurst(ctx, { start: 0.14, dur: 0.025, vol: 0.55, cutoff: 3000, q: 1.2 });
+        noiseBurst(ctx, { start: 0.14, dur: 0.07, vol: 0.7, cutoff: 500, q: 1.5 });
+      }
       // Chimes are pure sines with a long soft decay — no harsh saw/square edges.
       if (rec.promotion) { tone(ctx, { freq: 784, start: 0.1, dur: 0.35, vol: 0.06 }); }
       if (rec.wasHiddenAndRevealedThisMove || rec.capturedWasHiddenQueen) {
