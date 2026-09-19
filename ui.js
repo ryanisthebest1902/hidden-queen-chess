@@ -153,26 +153,60 @@
   let premoveQueue = []; // [{from, to, promotion, intendedCapture}], see section 8 (bot mode only)
 
   // ---------- Sound effects ----------
-  // Synthesized with the Web Audio API — no audio files to host or load.
-  // The AudioContext is created lazily inside a user gesture (browsers
-  // block audio before the first click/tap), and every call is wrapped so
-  // a browser without audio support can never break a move.
+  // Move/capture/check/game-over use the Lichess "sfx" sound set in sounds/
+  // (by Enigmahack, AGPLv3+ — see sounds/LICENSE.md), decoded through the Web
+  // Audio API. The lichess "standard" set is NOT used: lichess's COPYING.md
+  // lists it as a non-free exception. Anything that has no sample (the
+  // hidden-queen reveal chime, promotion) — or every sound, while the files
+  // are still loading or if they fail to load — is synthesized in the browser
+  // instead. Browsers block audio before the first click/tap, so the context
+  // starts suspended and is resumed inside a user gesture; every call is
+  // wrapped so a browser without audio can never break a move.
+  const SOUND_FILES = {
+    move: 'sounds/Move.mp3', capture: 'sounds/Capture.mp3', check: 'sounds/Check.mp3',
+    win: 'sounds/Victory.mp3', loss: 'sounds/Defeat.mp3', draw: 'sounds/Draw.mp3',
+  };
+  const soundBuffers = {};
   let audioCtx = null;
   let soundOn = true;
   try { soundOn = localStorage.getItem('hqc_sound') !== 'off'; } catch (e) { /* storage blocked — default on */ }
   let endSoundEngine = null; // engine the game-over sound last played for (a new game gets a new engine)
 
+  function ensureAudioCtx() {
+    if (audioCtx) return audioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+    for (const key of Object.keys(SOUND_FILES)) {
+      fetch(SOUND_FILES[key])
+        .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+        .then((data) => audioCtx.decodeAudioData(data))
+        .then((buf) => { soundBuffers[key] = buf; })
+        .catch(() => { /* no sample — the synthesized fallback covers it */ });
+    }
+    return audioCtx;
+  }
+  try { ensureAudioCtx(); } catch (e) { /* preload is best-effort */ } // start fetching now so the first move already has its sample
+
   function getAudio() {
     if (!soundOn) return null;
     try {
-      if (!audioCtx) {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return null;
-        audioCtx = new AC();
-      }
-      if (audioCtx.state === 'suspended') audioCtx.resume();
-      return audioCtx;
+      const ctx = ensureAudioCtx();
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+      return ctx;
     } catch (e) { return null; }
+  }
+  // Returns false if that sample isn't loaded (caller falls back to synthesis).
+  function playSample(ctx, key, { start = 0, vol = 0.9 } = {}) {
+    const buf = soundBuffers[key];
+    if (!buf) return false;
+    const src = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    gain.gain.value = vol;
+    src.buffer = buf;
+    src.connect(gain); gain.connect(ctx.destination);
+    src.start(ctx.currentTime + start);
+    return true;
   }
   function tone(ctx, { freq, toFreq, start = 0, dur = 0.12, type = 'sine', vol = 0.2 }) {
     const t0 = ctx.currentTime + start;
@@ -213,7 +247,10 @@
       // Deliberately NO pitched tone here: any sine with a pitch drop sounds like a
       // bouncing ball. A real piece-on-board sound is a sharp click (top) plus a
       // short dull thud (body), both just filtered noise.
-      if (rec.capture) {
+      const castleAt = 0.14; // second tap for the rook
+      if (playSample(ctx, rec.capture ? 'capture' : 'move')) {
+        if (rec.isCastle) playSample(ctx, 'move', { start: castleAt });
+      } else if (rec.capture) {
         noiseBurst(ctx, { dur: 0.03, vol: 0.7, cutoff: 3000, q: 1.2 });
         noiseBurst(ctx, { dur: 0.09, vol: 0.9, cutoff: 450, q: 1.5 });
         noiseBurst(ctx, { start: 0.07, dur: 0.03, vol: 0.5, cutoff: 2600, q: 1.2 }); // second clack — a piece knocked off
@@ -222,9 +259,9 @@
         noiseBurst(ctx, { dur: 0.025, vol: 0.55, cutoff: 3000, q: 1.2 });
         noiseBurst(ctx, { dur: 0.07, vol: 0.7, cutoff: 500, q: 1.5 });
       }
-      if (rec.isCastle) {
-        noiseBurst(ctx, { start: 0.14, dur: 0.025, vol: 0.55, cutoff: 3000, q: 1.2 });
-        noiseBurst(ctx, { start: 0.14, dur: 0.07, vol: 0.7, cutoff: 500, q: 1.5 });
+      if (rec.isCastle && !soundBuffers.move) {
+        noiseBurst(ctx, { start: castleAt, dur: 0.025, vol: 0.55, cutoff: 3000, q: 1.2 });
+        noiseBurst(ctx, { start: castleAt, dur: 0.07, vol: 0.7, cutoff: 500, q: 1.5 });
       }
       // Chimes are pure sines with a long soft decay — no harsh saw/square edges.
       if (rec.promotion) { tone(ctx, { freq: 784, start: 0.1, dur: 0.35, vol: 0.06 }); }
@@ -235,7 +272,7 @@
         tone(ctx, { freq: 1047, start: 0.38, dur: 0.6, vol: 0.05 });
       }
       if (engine && !engine.gameOver && engine.isInCheck(engine.turn)) {
-        tone(ctx, { freq: 880, start: 0.12, dur: 0.35, vol: 0.06 });
+        if (!playSample(ctx, 'check', { start: 0.1, vol: 0.8 })) tone(ctx, { freq: 880, start: 0.12, dur: 0.35, vol: 0.06 });
       }
     } catch (e) { /* audio must never break a move */ }
   }
@@ -243,7 +280,8 @@
     const ctx = getAudio();
     if (!ctx) return;
     try {
-      // Soft sine chimes, slow enough to overlap like bells: rising major
+      if (playSample(ctx, outcome, { vol: 0.8 })) return;
+      // Fallback (samples not loaded): soft sine chimes, slow enough to overlap like bells: rising major
       // arpeggio to win, a gentle falling minor pair to lose, one neutral pair for a draw.
       const notes = outcome === 'win' ? [523, 659, 784, 1047]
         : outcome === 'loss' ? [392, 330] : [440, 440];

@@ -57,6 +57,13 @@ URL is configured in `server-netplay.js` — deploy `server/` separately
 | `index.html` / `styles.css` | Markup and styling. |
 | `tests.html` | An in-browser automated test suite (open it directly) covering the reveal rules, the no-cheat guarantee, the bot's Elo scaling, the rating math, and the online-sync convergence trick. |
 
+## Credits
+
+Move, capture, check and game-over sounds are from the Lichess "sfx" sound set
+by [Enigmahack](https://github.com/Enigmahack), licensed AGPLv3+ — see
+[`sounds/LICENSE.md`](sounds/LICENSE.md). The hidden-queen reveal chime is
+synthesized in the browser.
+
 ## Running the tests
 
 Open `tests.html` in a browser. No build step, no server required (though
