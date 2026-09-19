@@ -186,16 +186,18 @@
     osc.connect(gain); gain.connect(ctx.destination);
     osc.start(t0); osc.stop(t0 + dur + 0.02);
   }
+  // A band-passed noise burst with a fast (squared) decay is what sounds
+  // like a wooden tap — plain noise or a pitched blip sounds like a beep.
   function noiseBurst(ctx, { start = 0, dur = 0.08, vol = 0.2, cutoff = 1500 }) {
     const t0 = ctx.currentTime + start;
     const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    for (let i = 0; i < len; i++) { const e = 1 - i / len; data[i] = (Math.random() * 2 - 1) * e * e; }
     const src = ctx.createBufferSource();
     const filter = ctx.createBiquadFilter();
     const gain = ctx.createGain();
-    filter.type = 'lowpass'; filter.frequency.value = cutoff;
+    filter.type = 'bandpass'; filter.frequency.value = cutoff; filter.Q.value = 0.9;
     gain.gain.value = vol;
     src.buffer = buf;
     src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
@@ -207,22 +209,26 @@
     const ctx = getAudio();
     if (!ctx || !rec) return;
     try {
+      // Soft wooden "tap": short mid-range noise click + a quiet, fixed-pitch low thump.
       if (rec.capture) {
-        noiseBurst(ctx, { dur: 0.14, vol: 0.35, cutoff: 1100 });
-        tone(ctx, { freq: 150, toFreq: 70, dur: 0.14, vol: 0.3 });
+        noiseBurst(ctx, { dur: 0.09, vol: 0.5, cutoff: 900 });
+        noiseBurst(ctx, { start: 0.045, dur: 0.07, vol: 0.3, cutoff: 1400 }); // second clack — a piece knocked off
+        tone(ctx, { freq: 120, toFreq: 90, dur: 0.1, vol: 0.14 });
       } else {
-        noiseBurst(ctx, { dur: 0.05, vol: 0.18, cutoff: 2200 });
-        tone(ctx, { freq: 260, toFreq: 160, dur: 0.07, vol: 0.18 });
+        noiseBurst(ctx, { dur: 0.055, vol: 0.4, cutoff: 1300 });
+        tone(ctx, { freq: 170, toFreq: 130, dur: 0.06, vol: 0.09 });
       }
-      if (rec.isCastle) { noiseBurst(ctx, { start: 0.09, dur: 0.05, vol: 0.18, cutoff: 2200 }); }
-      if (rec.promotion) { tone(ctx, { freq: 500, toFreq: 1000, start: 0.1, dur: 0.2, type: 'triangle', vol: 0.15 }); }
+      if (rec.isCastle) { noiseBurst(ctx, { start: 0.11, dur: 0.055, vol: 0.4, cutoff: 1300 }); }
+      // Chimes are pure sines with a long soft decay — no harsh saw/square edges.
+      if (rec.promotion) { tone(ctx, { freq: 784, start: 0.1, dur: 0.35, vol: 0.06 }); }
       if (rec.wasHiddenAndRevealedThisMove || rec.capturedWasHiddenQueen) {
-        // The signature moment — a rising sweep when a hidden queen is revealed.
-        tone(ctx, { freq: 300, toFreq: 1100, start: 0.12, dur: 0.4, type: 'sawtooth', vol: 0.12 });
+        // The signature moment — a gentle rising two-note chime.
+        tone(ctx, { freq: 523, start: 0.14, dur: 0.4, vol: 0.07 });
+        tone(ctx, { freq: 784, start: 0.26, dur: 0.5, vol: 0.07 });
+        tone(ctx, { freq: 1047, start: 0.38, dur: 0.6, vol: 0.05 });
       }
       if (engine && !engine.gameOver && engine.isInCheck(engine.turn)) {
-        tone(ctx, { freq: 660, start: 0.14, dur: 0.1, type: 'triangle', vol: 0.18 });
-        tone(ctx, { freq: 880, start: 0.24, dur: 0.14, type: 'triangle', vol: 0.18 });
+        tone(ctx, { freq: 880, start: 0.12, dur: 0.35, vol: 0.06 });
       }
     } catch (e) { /* audio must never break a move */ }
   }
@@ -230,9 +236,11 @@
     const ctx = getAudio();
     if (!ctx) return;
     try {
+      // Soft sine chimes, slow enough to overlap like bells: rising major
+      // arpeggio to win, a gentle falling minor pair to lose, one neutral pair for a draw.
       const notes = outcome === 'win' ? [523, 659, 784, 1047]
-        : outcome === 'loss' ? [392, 330, 262, 196] : [440, 440];
-      notes.forEach((freq, i) => tone(ctx, { freq, start: i * 0.14, dur: 0.3, type: 'triangle', vol: 0.2 }));
+        : outcome === 'loss' ? [392, 330] : [440, 440];
+      notes.forEach((freq, i) => tone(ctx, { freq, start: i * 0.2, dur: 0.7, vol: 0.08 }));
     } catch (e) { /* ignore */ }
   }
 
