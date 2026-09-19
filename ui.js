@@ -250,15 +250,10 @@
       // short dull thud (body), both just filtered noise.
       const castleAt = 0.14; // second tap for the rook
       if (soundBuffers.move) {
-        if (rec.capture) {
-          // The Lichess capture sample sounded bad, so a capture is the move
-          // sample layered twice: a fast, high-pitched snap on top of a slow,
-          // low thud just behind it (picked by ear from a few options).
-          playSample(ctx, 'move', { rate: 1.3 });
-          playSample(ctx, 'move', { rate: 0.6, start: 0.02 });
-        } else {
-          playSample(ctx, 'move');
-        }
+        // Captures deliberately use the plain move sample too: the Lichess
+        // capture sample and a layered/pitch-shifted version were both
+        // rejected by ear.
+        playSample(ctx, 'move');
         if (rec.isCastle) playSample(ctx, 'move', { start: castleAt });
       } else if (rec.capture) {
         noiseBurst(ctx, { dur: 0.03, vol: 0.7, cutoff: 3000, q: 1.2 });

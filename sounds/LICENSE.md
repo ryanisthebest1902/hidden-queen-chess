@@ -9,7 +9,7 @@ The files in this folder (`Move.mp3`, `Check.mp3`, `Victory.mp3`,
 - Source: https://github.com/lichess-org/lila/tree/master/public/sound/sfx
 - License reference: https://github.com/lichess-org/lila/blob/master/COPYING.md
 
-Captures reuse `Move.mp3` layered twice (one pitched up, one pitched down) — no separate capture file.
+Captures reuse `Move.mp3` — no separate capture file.
 
 These files are separate data assets loaded at runtime; this project's source
 code is not derived from Lichess code. The complete source of this project is
