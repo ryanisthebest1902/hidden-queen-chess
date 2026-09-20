@@ -27,6 +27,7 @@
   let myGameId = null;
   let myResumeToken = null;
   let myOpponentName = null;
+  let myTimeControl = null;
 
   // ---- Accounts (Phase 2/3) — needed for rated matchmaking + the
   // leaderboard; direct-challenge play never required this. Token/user are
@@ -106,6 +107,7 @@
       myGameId = payload.gameId;
       myResumeToken = payload.resumeToken;
       myOpponentName = payload.opponentName;
+      myTimeControl = payload.timeControl || null;
       if (callbacks.onMatched) callbacks.onMatched();
     });
     s.off('opponentDisconnected');
@@ -114,16 +116,16 @@
     s.on('opponentReconnected', () => { if (callbacks.onOpponentReconnected) callbacks.onOpponentReconnected(); });
   }
 
-  function hostGame(callbacks) {
+  // timeControl is "minutes+incrementSeconds", e.g. "5+3". The server
+  // validates it (falls back to 10+0 if out of range), so this is just a
+  // request, not a guarantee — currentTimeControl() reports what was
+  // actually used, from the server's matchFound.
+  function hostGame(callbacks, timeControl = '10+0') {
     return new Promise((resolve, reject) => {
       registerMatchListeners(callbacks);
       onceConnected((s) => {
         s.once('challengeCreated', ({ code }) => resolve(code));
-        // Generous time control — this build has no clock UI yet, so a
-        // real short clock would let someone lose on time with no visual
-        // warning at all. 30 minutes a side is effectively "untimed" for
-        // a casual game between friends.
-        s.emit('createChallenge', { timeControl: '30+0' });
+        s.emit('createChallenge', { timeControl });
       });
       connectSocket().once('connect_error', reject);
     });
@@ -195,6 +197,10 @@
   }
   function onMoveRejected(cb) { connectSocket().on('moveRejected', cb); }
   function onGameOver(cb) { connectSocket().on('gameOver', cb); }
+  // The server broadcasts { white, black, serverTime } (ms remaining, already
+  // net of the running side's elapsed time) about once a second. gameStart
+  // and moveApplied payloads also carry a `clocks` object of the same shape.
+  function onClockSync(cb) { connectSocket().on('clockSync', cb); }
 
   // Live leaderboard — independent of being in a game; connects lazily
   // like everything else here. Only one time class is ever watched at a
@@ -210,16 +216,17 @@
 
   function leaveRoom() {
     if (socket) { socket.removeAllListeners(); socket.disconnect(); socket = null; }
-    myColor = null; myGameId = null; myResumeToken = null; myOpponentName = null;
+    myColor = null; myGameId = null; myResumeToken = null; myOpponentName = null; myTimeControl = null;
   }
 
   function currentColor() { return myColor; }
   function currentOpponentName() { return myOpponentName; }
+  function currentTimeControl() { return myTimeControl; }
 
   const ServerNetExports = {
     isConfigured, hostGame, joinGame, submitSetupPick, sendMove,
-    onGameStart, onMoveApplied, onMoveRejected, onGameOver,
-    leaveRoom, currentColor, currentOpponentName,
+    onGameStart, onMoveApplied, onMoveRejected, onGameOver, onClockSync,
+    leaveRoom, currentColor, currentOpponentName, currentTimeControl,
     onLeaderboardUpdate, watchLeaderboard, unwatchLeaderboard,
     signup, login, logout, currentUser, findMatch, cancelMatch,
     resign, offerDraw, respondDraw, onDrawOffered,

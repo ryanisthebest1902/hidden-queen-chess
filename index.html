@@ -128,6 +128,39 @@
   </div>
 </div>
 
+<!-- Host a game: time control picker (each button's data-tc is "minutes+incrementSeconds") -->
+<div class="modal-overlay hidden" id="host-time-modal">
+  <div class="modal-box">
+    <h2>Choose a time control</h2>
+    <p>How long does each player get? The clock starts once both hidden queens are chosen.</p>
+    <div class="mode-choices">
+      <button class="mode-choice-btn host-tc-btn" data-tc="3+0">
+        <span class="mode-choice-title">3 min</span>
+        <span class="mode-choice-sub">Blitz — fast</span>
+      </button>
+      <button class="mode-choice-btn host-tc-btn" data-tc="5+3">
+        <span class="mode-choice-title">5 min + 3 sec</span>
+        <span class="mode-choice-sub">Blitz — 3 seconds added after every move</span>
+      </button>
+      <button class="primary mode-choice-btn host-tc-btn" data-tc="10+0">
+        <span class="mode-choice-title">10 min</span>
+        <span class="mode-choice-sub">Rapid — a good default</span>
+      </button>
+      <button class="mode-choice-btn host-tc-btn" data-tc="15+10">
+        <span class="mode-choice-title">15 min + 10 sec</span>
+        <span class="mode-choice-sub">Rapid — 10 seconds added after every move</span>
+      </button>
+      <button class="mode-choice-btn host-tc-btn" data-tc="30+0">
+        <span class="mode-choice-title">30 min</span>
+        <span class="mode-choice-sub">Relaxed — plenty of time to think</span>
+      </button>
+    </div>
+    <div class="modal-actions">
+      <button id="host-time-back-btn">Back</button>
+    </div>
+  </div>
+</div>
+
 <!-- Matchmaking: time control picker -->
 <div class="modal-overlay hidden" id="match-picker-modal">
   <div class="modal-box">

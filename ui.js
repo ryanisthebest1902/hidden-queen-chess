@@ -303,6 +303,59 @@
   // the branch this flag gates, so gating on stage itself would be circular
   // (it could never become true on the very call that's supposed to set it).
   let onlineServerConfirmedOver = false;
+
+  // ---- online chess clock ----
+  // The server owns the clocks; this only mirrors and animates them.
+  // onlineClocks = { w, b, at }: ms remaining for each color as of `at`
+  // (performance.now()), set from gameStart / moveApplied / clockSync. Between
+  // those, the side to move is counted down locally so the display is smooth
+  // instead of jumping once a second. A late/lost sync self-corrects on the
+  // next one — a wrong local clock never decides a game, the server does.
+  let onlineClocks = null;
+  let clockTicker = null;
+
+  function parseTimeControlMs(tc) {
+    const m = /^(\d+)\+(\d+)$/.exec(String(tc || ''));
+    return m ? parseInt(m[1], 10) * 60000 : null;
+  }
+  function setOnlineClocks(c) {
+    if (!c || typeof c.white !== 'number' || typeof c.black !== 'number') return;
+    onlineClocks = { w: c.white, b: c.black, at: performance.now() };
+    updateClockDisplay();
+  }
+  function clockMsFor(color) {
+    if (!onlineClocks) return null;
+    let ms = onlineClocks[color];
+    const running = stage === 'playing' && !onlineServerConfirmedOver && engine && engine.turn === color;
+    if (running) ms -= performance.now() - onlineClocks.at;
+    return Math.max(0, ms);
+  }
+  function formatClock(ms) {
+    if (ms < 10000) { // last 10 seconds: show tenths
+      const t = Math.floor(ms / 100);
+      return `0:0${Math.floor(t / 10)}.${t % 10}`;
+    }
+    const total = Math.ceil(ms / 1000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  }
+  function updateClockDisplay() {
+    if (mode !== 'online') return;
+    for (const color of ['w', 'b']) {
+      const el = document.getElementById(color === 'w' ? 'clock-w' : 'clock-b');
+      const ms = clockMsFor(color);
+      if (!el || ms == null) continue;
+      el.textContent = formatClock(ms);
+      el.classList.toggle('low', ms > 0 && ms < 30000);
+      el.classList.toggle('expired', ms <= 0);
+    }
+  }
+  function startClockTicker() {
+    if (clockTicker) clearInterval(clockTicker);
+    clockTicker = setInterval(updateClockDisplay, 100);
+  }
+  function stopClockTicker() {
+    if (clockTicker) { clearInterval(clockTicker); clockTicker = null; }
+  }
   let authMode = 'login'; // 'login' | 'signup' — which form auth-modal is currently showing
   let leaderboardTimeClass = null; // currently-watched tab while leaderboard-modal is open, else null
 
@@ -327,12 +380,13 @@
     if (mode === 'online') {
       const meColor = Net.currentColor();
       const label = (c) => c === meColor ? 'You' : 'Opponent';
-      nameplateHuman.innerHTML = `<span class="name">${label(WHITE)}</span>`;
+      nameplateHuman.innerHTML = `<span class="name">${label(WHITE)}</span><span class="clock" id="clock-w"></span>`;
       nameplateHuman.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === WHITE);
-      nameplateBot.innerHTML = `<span class="name">${label(BLACK)}</span>`;
+      nameplateBot.innerHTML = `<span class="name">${label(BLACK)}</span><span class="clock" id="clock-b"></span>`;
       nameplateBot.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === BLACK);
       trayByHumanLabel.textContent = 'Captured by ' + label(WHITE).toLowerCase();
       trayByBotLabel.textContent = 'Captured by ' + label(BLACK).toLowerCase();
+      updateClockDisplay();
       return;
     }
     trayByHumanLabel.textContent = 'Captured by you';
@@ -385,8 +439,24 @@
     openModePicker();
   });
 
+  // Hosting is now two steps: pick a time control, then create the challenge.
+  const hostTimeModal = document.getElementById('host-time-modal');
   onlineHostBtn.addEventListener('click', () => {
     onlinePickerModal.classList.add('hidden');
+    hostTimeModal.classList.remove('hidden');
+  });
+  document.getElementById('host-time-back-btn').addEventListener('click', () => {
+    hostTimeModal.classList.add('hidden');
+    onlinePickerModal.classList.remove('hidden');
+  });
+  for (const btn of hostTimeModal.querySelectorAll('.host-tc-btn')) {
+    btn.addEventListener('click', () => {
+      hostTimeModal.classList.add('hidden');
+      startHosting(btn.dataset.tc);
+    });
+  }
+
+  function startHosting(timeControl) {
     onlineStatusContext = 'host';
     onlineStatusHeading.textContent = 'Creating a challenge';
     onlineRoomCodeDisplay.classList.add('hidden');
@@ -401,7 +471,7 @@
       onOpponentDisconnected: () => {
         if (mode === 'online') showToast('Your opponent disconnected.');
       },
-    }).then((code) => {
+    }, timeControl).then((code) => {
       onlineRoomCodeDisplay.textContent = code;
       onlineRoomCodeDisplay.classList.remove('hidden');
       onlineStatusMessage.textContent = 'Share this code with your friend. Waiting for them to join…';
@@ -410,7 +480,7 @@
       showToast('Could not reach the game server — try again in a moment.');
       openModePicker();
     });
-  });
+  }
 
   onlineStatusCancelBtn.addEventListener('click', () => {
     if (onlineStatusContext === 'queue') Net.cancelMatch();
@@ -678,6 +748,11 @@
     onlineMoveState = null;
     onlineMySetupDone = false;
     onlineServerConfirmedOver = false;
+    // Show the full starting time on both clocks during setup (not running
+    // yet — the server starts them when both hidden queens are chosen).
+    const initialMs = parseTimeControlMs(Net.currentTimeControl());
+    onlineClocks = initialMs != null ? { w: initialMs, b: initialMs, at: performance.now() } : null;
+    startClockTicker();
     premovePanelBox.classList.add('hidden'); // no local "opponent thinking" window to premove into — see section 8 scoping note
     historyList.innerHTML = '';
     trayByHuman.innerHTML = '';
@@ -692,7 +767,7 @@
     // intent to the server and wait for its authoritative echo, exactly
     // like the old Firebase guest always did (see engine.js's
     // applyRemoteMove and server-netplay.js's onMoveApplied).
-    Net.onMoveApplied(({ remoteMoveMsg }) => {
+    Net.onMoveApplied(({ remoteMoveMsg, clocks }) => {
       // engine.makeMove() refuses to run at all once engine.gameOver is
       // set (returns {ok:false, reason:'game_over'} immediately) — so a
       // wrongly-concluded local checkmate/stalemate (see
@@ -704,6 +779,7 @@
       // so that stale conclusion is safe to clear right before replaying.
       if (stage !== 'over' && engine.gameOver) engine.gameOver = null;
       const result = Net.applyRemoteMove(engine, remoteMoveMsg);
+      setOnlineClocks(clocks); // after the replay, so the clock counting down is the NEW side to move (includes any increment)
       onlineMoveState = null;
       if (result.ok) {
         lastMoveSquares = { from: result.record.from, to: result.record.to };
@@ -747,9 +823,13 @@
       confirmModal.classList.add('hidden');
       stage = 'playing';
       statusBanner.textContent = '';
+      setOnlineClocks(payload.clocks);
+      const tc = Net.currentTimeControl();
+      if (tc) showToast(`Game on — time control ${tc.replace('+', ' min + ')} sec.`);
       updateStatusAndTurn();
       render();
     });
+    Net.onClockSync((c) => setOnlineClocks(c));
     Net.onGameOver((info) => {
       // The server is authoritative for end-of-game, and this listener is
       // NECESSARY (not just a safety net): this client's own local
@@ -771,6 +851,7 @@
         reason: info.reason,
       };
       onlineServerConfirmedOver = true; // the only thing updateStatusAndTurn's isOverForDisplay trusts for online mode
+      updateClockDisplay(); // freezes both clocks now that nothing is "running" anymore
       // updateStatusAndTurn() sets stage = 'over' — must run before render(),
       // since render() reads stage to decide whether Game Controls (resign/
       // draw) should still be showing. Without this, resigning or an
@@ -1632,6 +1713,7 @@
     if (mode === 'online') Net.leaveRoom();
     resignConfirmModal.classList.add('hidden');
     drawOfferModal.classList.add('hidden');
+    hostTimeModal.classList.add('hidden');
     openModePicker();
   });
 

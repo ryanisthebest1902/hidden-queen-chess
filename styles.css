@@ -273,6 +273,22 @@ main {
 }
 .nameplate .elo, .nameplate .name { font-weight: 600; }
 .nameplate.active-turn { border-color: var(--accent); }
+/* Online chess clock — monospace + tabular digits so the text doesn't jitter as it ticks. */
+.nameplate .clock {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 3.6em;
+  text-align: center;
+}
+.nameplate.active-turn .clock { background: rgba(212, 175, 55, 0.22); }
+.nameplate .clock.low { color: #ff6b6b; }
+.nameplate .clock.expired { color: #ff6b6b; opacity: 0.7; }
 .nameplate-vs { color: var(--text-dim); font-size: 0.85em; }
 
 .rating-change-line {
