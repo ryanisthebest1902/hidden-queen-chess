@@ -190,6 +190,18 @@ function parseTimeControl(tc) {
   return { baseMs: parseInt(m[1], 10) * 60 * 1000, incMs: parseInt(m[2], 10) * 1000 };
 }
 
+// Clients choose the time control string, so it can't be trusted as-is:
+// "0+0" would lose instantly on move one and "99999+0" would be an
+// unlimited game. Anything outside a sane range (1-180 min base, 0-60s
+// increment) or malformed falls back to `fallback`.
+function sanitizeTimeControl(tc, fallback = '10+0') {
+  const m = /^(\d{1,3})\+(\d{1,2})$/.exec(String(tc || '').trim());
+  if (!m) return fallback;
+  const base = parseInt(m[1], 10), inc = parseInt(m[2], 10);
+  if (base < 1 || base > 180 || inc > 60) return fallback;
+  return `${base}+${inc}`;
+}
+
 async function generateUniqueChallengeCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I ambiguity
   let code;
@@ -355,6 +367,19 @@ function startHousekeeping(gameId) {
             return;
           }
         }
+        // Forfeit on time even if the player whose clock ran out never
+        // touches the board — makeMove's own overrun check only ever fires
+        // when they try to move, so without this an idle player at 0:00
+        // would hold the game open forever. Same LAG_GRACE_MS as makeMove
+        // so a move already in flight isn't beaten by the housekeeping tick.
+        if (room.turnStartedAtServerTs != null) {
+          const sideToMove = room.engineData.turn;
+          const left = room.msRemaining[sideToMove] - (now - room.turnStartedAtServerTs);
+          if (left <= -LAG_GRACE_MS) {
+            await endGame(gameId, resultForWinner(otherColor(sideToMove)), 'timeout');
+            return;
+          }
+        }
         const clocks = currentClocks(room);
         io.to(room.sockets.w).emit('clockSync', { ...clocks, serverTime: now });
         io.to(room.sockets.b).emit('clockSync', { ...clocks, serverTime: now });
@@ -496,6 +521,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('createChallenge', async ({ timeControl, name }) => {
+    const safeTimeControl = sanitizeTimeControl(timeControl);
     const code = await generateUniqueChallengeCode();
     const displayName = socket.data.user ? socket.data.user.displayName : (name || 'Player').slice(0, 24);
     await saveChallenge(code, {
@@ -504,11 +530,11 @@ io.on('connection', (socket) => {
       creatorInstanceId: INSTANCE_ID,
       creatorName: displayName,
       creatorUserId: socket.data.user ? socket.data.user.id : null,
-      timeControl: timeControl || '10+0',
+      timeControl: safeTimeControl,
       createdAt: Date.now(),
     }, CHALLENGE_TTL_MS);
     socket.data.pendingChallengeCode = code;
-    socket.emit('challengeCreated', { code, timeControl: timeControl || '10+0' });
+    socket.emit('challengeCreated', { code, timeControl: safeTimeControl });
   });
 
   socket.on('cancelChallenge', async () => {
@@ -555,7 +581,7 @@ io.on('connection', (socket) => {
       socket.emit('queueRejected', { reason: 'already_queued_or_in_game' });
       return;
     }
-    const tc = timeControl || '10+0';
+    const tc = sanitizeTimeControl(timeControl);
     const timeClass = timeClassOf(tc);
     let rating = 1500;
     try {
