@@ -31,6 +31,20 @@ scaling across multiple instances sharing one Redis-backed state store —
 see [`server/`](server/) for the source if you want to run or deploy your
 own instance.
 
+Online games include:
+
+- **Chess clocks** with a choice of time control when hosting (3+0, 5+3,
+  10+0, 15+10, 30+0). The server owns the clocks and ends the game on time
+  even if the player who ran out never touches the board.
+- **Resign, draw offers and rematches** (a rematch swaps colors; it's casual).
+- **Premoves** — queue up to three moves during your opponent's turn.
+- **Replays** of finished games, with both hidden queens revealed, and
+  **player profiles** (ratings, record, recent games) from the leaderboard.
+- **Sound effects** (see Credits) with a mute button.
+
+The server tests in `server/test/` need Redis, so run them against a
+deployed instance: `TEST_URL=https://<your-server> node server/test/phase7-clock-test.js`.
+
 ## Deploying to GitHub Pages
 
 1. Push this repo to GitHub.
