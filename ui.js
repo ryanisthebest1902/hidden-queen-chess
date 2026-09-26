@@ -1528,7 +1528,9 @@
   }
 
   function moveToNotation(rec) {
-    const type = rec.pieceApparentTypeAtMoveTime;
+    // A move that promotes is always a pawn move — but the engine records the
+    // piece's type AFTER promotion, which would print "Nxb8=N" for axb8=N.
+    const type = rec.promotion ? 'P' : rec.pieceApparentTypeAtMoveTime;
     let s = '';
     if (rec.isCastle === 'K') s = 'O-O';
     else if (rec.isCastle === 'Q') s = 'O-O-O';
