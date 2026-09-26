@@ -41,6 +41,10 @@ Online games include:
 - **Replays** of finished games, with both hidden queens revealed, and
   **player profiles** (ratings, record, recent games) from the leaderboard.
 - **Sound effects** (see Credits) with a mute button.
+- **Password recovery without email.** There's no email service (that would
+  need a custom domain or a public postal address), so each account gets a
+  one-time recovery code at signup. Only a bcrypt hash of it is stored; using
+  it to reset a password burns it and issues a new one. See `server/auth.js`.
 
 The server tests in `server/test/` need Redis, so run them against a
 deployed instance: `TEST_URL=https://<your-server> node server/test/phase7-clock-test.js`.
