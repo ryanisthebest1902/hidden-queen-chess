@@ -33,7 +33,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 const { Engine, sq, algebraic, otherColor, serializeEngine, deserializeEngine } = require('../engine.js');
 const { pool, initSchema } = require('./db.js');
-const { signup, login, verifyToken } = require('./auth.js');
+const { signup, login, verifyToken, resetPassword } = require('./auth.js');
 const { timeClassOf, applyGameResult, getRatingsForUser, getLeaderboard } = require('./ratings.js');
 const { createRateLimiter } = require('./rateLimit.js');
 const cluster = require('./cluster.js');
@@ -70,6 +70,8 @@ const checkSocketMessageRate = createRateLimiter({ windowMs: SOCKET_MESSAGE_LIMI
 
 const checkSignupRateByIp = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 8 }); // 8 signups/hour/IP
 const checkLoginRateByIp = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 20 }); // 20 attempts/10min/IP — generous enough for a real person fumbling a password, tight enough to slow a brute force
+const checkResetRateByIp = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 6 }); // 6 password-reset attempts/hour/IP
+const checkResetRateByEmail = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 6 }); // ...and per email, so rotating IPs can't hammer one account's code
 const checkQueueActionRate = createRateLimiter({ windowMs: 10 * 1000, max: 8 }); // 8 join/cancel calls per 10s per account
 
 const app = express();
@@ -111,6 +113,22 @@ app.post('/api/login', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('login error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+app.post('/api/reset-password', async (req, res) => {
+  const body = req.body || {};
+  const emailKey = String(body.email || '').toLowerCase().trim();
+  if (!checkResetRateByIp(req.ip) || !checkResetRateByEmail(emailKey)) {
+    return res.status(429).json({ ok: false, reason: 'rate_limited' });
+  }
+  try {
+    const result = await resetPassword(body);
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('reset-password error', err);
     res.status(500).json({ ok: false, reason: 'server_error' });
   }
 });

@@ -637,17 +637,28 @@
   }
   refreshAuthStatus();
 
+  const authCodeInput = document.getElementById('auth-code-input');
+  const authForgotBtn = document.getElementById('auth-forgot-btn');
+
+  // authMode: 'login' | 'signup' | 'reset' (forgot password: email + recovery code + new password)
   function applyAuthMode() {
+    authNameInput.classList.toggle('hidden', authMode !== 'signup');
+    authCodeInput.classList.toggle('hidden', authMode !== 'reset');
+    authForgotBtn.classList.toggle('hidden', authMode !== 'login');
+    authPasswordInput.placeholder = authMode === 'reset' ? 'New password (8+ characters)' : 'Password';
+    authPasswordInput.autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
     if (authMode === 'login') {
       authModalHeading.textContent = 'Log in';
-      authNameInput.classList.add('hidden');
       authSwitchBtn.textContent = 'Need an account? Sign up';
       authSubmitBtn.textContent = 'Log in';
-    } else {
+    } else if (authMode === 'signup') {
       authModalHeading.textContent = 'Sign up';
-      authNameInput.classList.remove('hidden');
       authSwitchBtn.textContent = 'Have an account? Log in';
       authSubmitBtn.textContent = 'Sign up';
+    } else {
+      authModalHeading.textContent = 'Reset your password';
+      authSwitchBtn.textContent = 'Back to log in';
+      authSubmitBtn.textContent = 'Reset password';
     }
   }
 
@@ -657,13 +668,59 @@
     authError.classList.add('hidden');
     authEmailInput.value = '';
     authNameInput.value = '';
+    authCodeInput.value = '';
     authPasswordInput.value = '';
     authModal.classList.remove('hidden');
   }
 
+  // ---- Recovery code screen (after signup, and after a password reset) ----
+  // There's no email on this site, so this code is the only way back into an
+  // account if the password is forgotten. Shown once; Continue stays disabled
+  // until the player ticks that they've saved it.
+  const recoveryModal = document.getElementById('recovery-modal');
+  const recoveryCodeDisplay = document.getElementById('recovery-code-display');
+  const recoverySavedCheck = document.getElementById('recovery-saved-check');
+  const recoveryContinueBtn = document.getElementById('recovery-continue-btn');
+  let recoveryAfterContinue = null;
+  let recoveryEmail = '';
+
+  function showRecoveryCode({ code, email, heading, text, then }) {
+    document.getElementById('recovery-heading').textContent = heading;
+    document.getElementById('recovery-text').innerHTML = text; // static strings from this file only — never user input
+    recoveryCodeDisplay.textContent = code;
+    recoveryEmail = email;
+    recoverySavedCheck.checked = false;
+    recoveryContinueBtn.disabled = true;
+    recoveryAfterContinue = then || null;
+    recoveryModal.classList.remove('hidden');
+  }
+  recoverySavedCheck.addEventListener('change', () => { recoveryContinueBtn.disabled = !recoverySavedCheck.checked; });
+  document.getElementById('recovery-copy-btn').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(recoveryCodeDisplay.textContent); showToast('Recovery code copied.'); }
+    catch (e) { showToast('Could not copy — select the code and copy it by hand.'); }
+  });
+  document.getElementById('recovery-download-btn').addEventListener('click', () => {
+    const body = `Hidden Queen Chess — account recovery code\n\nAccount email: ${recoveryEmail}\nRecovery code: ${recoveryCodeDisplay.textContent}\n\n`
+      + 'Keep this somewhere safe and private. If you forget your password, choose "Forgot your password?" on the log-in screen and enter your email and this code.\n'
+      + 'The code works once — after a reset you get a new one.\n';
+    const url = URL.createObjectURL(new Blob([body], { type: 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'hidden-queen-chess-recovery-code.txt';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  recoveryContinueBtn.addEventListener('click', () => {
+    if (!recoverySavedCheck.checked) return;
+    recoveryModal.classList.add('hidden');
+    recoveryCodeDisplay.textContent = ''; // don't leave it sitting in the page
+    const next = recoveryAfterContinue; recoveryAfterContinue = null;
+    if (next) next();
+  });
+
   function authErrorMessage(reason) {
     switch (reason) {
       case 'email_taken': return 'That email is already registered — try logging in instead.';
+      case 'invalid_email_or_code': return "That email and recovery code don't match. Check both and try again.";
       case 'weak_password': return 'Password must be at least 8 characters.';
       case 'invalid_email': return 'Enter a valid email address.';
       case 'invalid_credentials': return 'Incorrect email or password.';
@@ -684,9 +741,15 @@
   });
 
   authSwitchBtn.addEventListener('click', () => {
-    authMode = authMode === 'login' ? 'signup' : 'login';
+    authMode = authMode === 'login' ? 'signup' : 'login'; // signup and reset both go back to login
     applyAuthMode();
     authError.classList.add('hidden');
+  });
+  authForgotBtn.addEventListener('click', () => {
+    authMode = 'reset';
+    applyAuthMode();
+    authError.classList.add('hidden');
+    authPasswordInput.value = '';
   });
 
   authCancelBtn.addEventListener('click', () => {
@@ -700,6 +763,22 @@
     authError.classList.add('hidden');
     authSubmitBtn.disabled = true;
     try {
+      if (authMode === 'reset') {
+        const result = await Net.resetPassword({ email, recoveryCode: authCodeInput.value, newPassword: password });
+        if (result.ok) {
+          authModal.classList.add('hidden');
+          showRecoveryCode({
+            code: result.recoveryCode, email,
+            heading: 'Password changed — save your NEW code',
+            text: 'Your password was reset. The recovery code you just used is now <strong>used up</strong>; this is your new one. It is shown only once.',
+            then: () => { showToast('Now log in with your new password.'); openAuthModal('login'); },
+          });
+        } else {
+          authError.textContent = authErrorMessage(result.reason);
+          authError.classList.remove('hidden');
+        }
+        return;
+      }
       const result = authMode === 'login'
         ? await Net.login({ email, password })
         : await Net.signup({ email, password, displayName });
@@ -707,6 +786,13 @@
         authModal.classList.add('hidden');
         refreshAuthStatus();
         showToast(authMode === 'login' ? `Welcome back, ${result.user.displayName}!` : `Welcome, ${result.user.displayName}!`);
+        if (authMode === 'signup' && result.recoveryCode) {
+          showRecoveryCode({
+            code: result.recoveryCode, email,
+            heading: 'Save your recovery code',
+            text: "If you ever forget your password, this code is the <strong>only</strong> way back into your account. This site has no email, so we can't send you a reset link. <strong>It is shown only once.</strong>",
+          });
+        }
       } else {
         authError.textContent = authErrorMessage(result.reason);
         authError.classList.remove('hidden');

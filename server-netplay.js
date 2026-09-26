@@ -83,6 +83,11 @@
     if (result.ok) setAuth(result.token, result.user);
     return result;
   }
+  // Resolves { ok:true, recoveryCode } (a NEW code — the old one is now used up)
+  // or { ok:false, reason }. Doesn't log the player in.
+  async function resetPassword({ email, recoveryCode, newPassword }) {
+    return apiPost('/api/reset-password', { email, recoveryCode, newPassword });
+  }
   async function login({ email, password }) {
     const result = await apiPost('/api/login', { email, password });
     if (result.ok) setAuth(result.token, result.user);
@@ -265,7 +270,7 @@
     onGameStart, onMoveApplied, onMoveRejected, onGameOver, onClockSync,
     leaveRoom, currentColor, currentOpponentName, currentTimeControl, currentGameId, getJson,
     onLeaderboardUpdate, watchLeaderboard, unwatchLeaderboard,
-    signup, login, logout, currentUser, findMatch, cancelMatch,
+    signup, login, resetPassword, logout, currentUser, findMatch, cancelMatch,
     resign, offerDraw, respondDraw, onDrawOffered,
     requestRematch, onRematchOffered, onRematchUnavailable, onRematchStarted, resetGameListeners,
     applyRemoteMove, // re-exported so ui.js doesn't need a second global reference

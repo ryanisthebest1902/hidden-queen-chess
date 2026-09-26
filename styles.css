@@ -504,3 +504,25 @@ button.mode-choice-btn.primary .mode-choice-sub { color: #1b1b1f; opacity: 0.75;
 .replay-controls { display: flex; gap: 6px; justify-content: center; }
 .replay-controls button { min-width: 44px; }
 .replay-legend { font-size: 0.8em; color: var(--text-dim); text-align: center; margin: 10px 0 0 0; }
+
+/* ---------- Recovery code / forgot password ---------- */
+.recovery-code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 1.5em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 14px 10px;
+  margin: 10px 0;
+  border-radius: 8px;
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  user-select: all;
+  word-break: break-all;
+}
+.link-btn {
+  background: none; border: none; padding: 2px 0; margin: 2px 0 6px 0;
+  color: var(--text-dim); text-decoration: underline; cursor: pointer; font-size: 0.85em;
+}
+.link-btn:hover { color: var(--accent); background: none; }

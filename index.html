@@ -250,7 +250,9 @@
     <h2 id="auth-modal-heading">Log in</h2>
     <input type="email" id="auth-email-input" class="room-code-input auth-input" placeholder="Email" autocomplete="email">
     <input type="text" id="auth-name-input" class="room-code-input auth-input hidden" placeholder="Display name" autocomplete="nickname" maxlength="24">
+    <input type="text" id="auth-code-input" class="room-code-input auth-input hidden" placeholder="Recovery code (XXXX-XXXX-XXXX-XXXX)" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="24">
     <input type="password" id="auth-password-input" class="room-code-input auth-input" placeholder="Password" autocomplete="current-password">
+    <button id="auth-forgot-btn" class="link-btn">Forgot your password?</button>
     <p id="auth-error" class="room-error hidden"></p>
     <div class="modal-actions" style="justify-content: space-between;">
       <button id="auth-switch-btn">Need an account? Sign up</button>
@@ -258,6 +260,25 @@
         <button id="auth-cancel-btn">Cancel</button>
         <button class="primary" id="auth-submit-btn">Log in</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recovery code: shown once after signup or a password reset. There is no
+     email on this site, so this code is the ONLY way back into an account
+     if the password is forgotten. -->
+<div class="modal-overlay hidden" id="recovery-modal">
+  <div class="modal-box">
+    <h2 id="recovery-heading">Save your recovery code</h2>
+    <p id="recovery-text">If you ever forget your password, this code is the only way to get back into your account. This site has no email, so we can't send you a reset link. <strong>It is shown only once.</strong></p>
+    <div class="recovery-code" id="recovery-code-display"></div>
+    <div class="modal-actions" style="justify-content: flex-start;">
+      <button id="recovery-copy-btn">Copy</button>
+      <button id="recovery-download-btn">Download as a file</button>
+    </div>
+    <label class="modal-checkbox"><input type="checkbox" id="recovery-saved-check"> I've saved my recovery code somewhere safe</label>
+    <div class="modal-actions">
+      <button class="primary" id="recovery-continue-btn" disabled>Continue</button>
     </div>
   </div>
 </div>

@@ -27,6 +27,10 @@ async function initSchema() {
       created_at timestamptz NOT NULL DEFAULT now()
     );
   `);
+  // Added for password recovery without email: a bcrypt hash of the one-time
+  // recovery code shown to the player at signup. Null for accounts made before
+  // this existed (they can't reset a password until they have a code).
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_hash text;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS games (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
