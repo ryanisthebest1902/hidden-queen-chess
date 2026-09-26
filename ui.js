@@ -1036,7 +1036,7 @@
     const initialMs = parseTimeControlMs(Net.currentTimeControl());
     onlineClocks = initialMs != null ? { w: initialMs, b: initialMs, at: performance.now() } : null;
     startClockTicker();
-    premovePanelBox.classList.add('hidden'); // no local "opponent thinking" window to premove into — see section 8 scoping note
+    premovePanelBox.classList.remove('hidden'); // online premoves: queue moves during the opponent's turn, fired when their move arrives
     historyList.innerHTML = '';
     trayByHuman.innerHTML = '';
     trayByBot.innerHTML = '';
@@ -1073,6 +1073,10 @@
       // in Net.onGameOver above; a checkmating move hits this same path.
       updateStatusAndTurn();
       render();
+      // The opponent's move just arrived and it's my turn: fire the next
+      // premove if it still checks out (processNextPremove re-validates it
+      // against the real board, and discards the whole queue if not).
+      if (result.ok) processNextPremove();
     });
     Net.onMoveRejected((payload) => {
       onlineMoveState = null;
@@ -1134,6 +1138,7 @@
         reason: info.reason,
       };
       onlineServerConfirmedOver = true; // the only thing updateStatusAndTurn's isOverForDisplay trusts for online mode
+      premoveQueue = []; // nothing left to fire once the game is over
       updateClockDisplay(); // freezes both clocks now that nothing is "running" anymore
       // updateStatusAndTurn() sets stage = 'over' — must run before render(),
       // since render() reads stage to decide whether Game Controls (resign/
@@ -1734,8 +1739,8 @@
     if (stage !== 'playing') return;
     if (mode === 'hotseat') { handleMoveClick(square, engine.turn); return; } // no premove concept when it's always someone's own live turn
     if (mode === 'online') {
-      if (onlineMoveState === 'sending') return; // already sent a move, waiting for the host's authoritative echo
-      if (engine.turn !== Net.currentColor()) return; // not your turn — no premoves in online mode (kept out of scope for this pass)
+      if (onlineMoveState === 'sending') return; // already sent a move, waiting for the server's authoritative echo
+      if (engine.turn !== Net.currentColor()) { onPremoveClick(square); return; } // opponent's turn: queue a premove
       handleMoveClick(square, Net.currentColor());
       return;
     }
@@ -1810,8 +1815,12 @@
   // and it moved away on its own turn) — the ENTIRE remaining queue is
   // discarded, never silently replayed as something else.
 
+  // Whose premoves these are: the human in bot mode (always White), or
+  // whichever color this browser is playing online.
+  function premoveColor() { return mode === 'online' ? Net.currentColor() : HUMAN; }
+
   function getProjectedBoard() {
-    const board = engine.getPublicView(HUMAN);
+    const board = engine.getPublicView(premoveColor());
     for (const pm of premoveQueue) {
       board[pm.to] = board[pm.from];
       board[pm.from] = null;
@@ -1828,7 +1837,7 @@
 
     if (selected === null) {
       const piece = board[square];
-      if (piece && piece.color === HUMAN) {
+      if (piece && piece.color === premoveColor()) {
         selected = square;
         legalTargets = engine.pseudoMovesFor(square, board, null);
         render();
@@ -1845,7 +1854,7 @@
     const target = legalTargets.find(m => m.to === square);
     if (!target) {
       const piece = board[square];
-      if (piece && piece.color === HUMAN) {
+      if (piece && piece.color === premoveColor()) {
         selected = square;
         legalTargets = engine.pseudoMovesFor(square, board, null);
         render();
@@ -1870,7 +1879,8 @@
   // the front of the queue if it still checks out, chaining through up to
   // MAX_PREMOVES automatically as long as each one keeps holding up.
   function processNextPremove() {
-    if (premoveQueue.length === 0 || stage !== 'playing' || engine.turn !== HUMAN) return;
+    if (premoveQueue.length === 0 || stage !== 'playing' || engine.turn !== premoveColor()) return;
+    if (mode === 'online' && (onlineMoveState === 'sending' || onlineServerConfirmedOver)) return;
     const pm = premoveQueue.shift();
     const legal = engine.legalMovesFrom(pm.from);
     const chosen = legal.find(m => m.to === pm.to);
