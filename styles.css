@@ -459,3 +459,48 @@ button.mode-choice-btn.primary .mode-choice-sub { color: #1b1b1f; opacity: 0.75;
 .leaderboard-empty, .leaderboard-loading { color: var(--text-dim); text-align: center; padding: 20px; }
 
 .rematch-note { margin: 8px 0 0 0; font-size: 0.85em; color: var(--text-dim); }
+
+/* ---------- Profile ---------- */
+.profile-since { margin: -8px 0 12px 0; color: var(--text-dim); font-size: 0.9em; }
+.profile-ratings { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.profile-chip {
+  flex: 1; min-width: 110px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--panel-border); text-align: center;
+}
+.profile-chip .label { display: block; font-size: 0.8em; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.profile-chip .value { display: block; font-size: 1.4em; font-weight: 700; color: var(--accent); }
+.profile-chip .sub { display: block; font-size: 0.75em; color: var(--text-dim); }
+.profile-record { margin: 0 0 12px 0; font-weight: 600; }
+.profile-section-title { margin: 12px 0 6px 0; font-size: 0.9em; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.profile-game {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px;
+  border-bottom: 1px solid var(--panel-border); font-size: 0.92em;
+}
+.profile-game .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-game .meta { color: var(--text-dim); font-size: 0.85em; white-space: nowrap; }
+.profile-game .badge { font-weight: 700; min-width: 3.2em; text-align: center; }
+.profile-game .badge.win { color: #7bd88f; }
+.profile-game .badge.loss { color: #ff8a80; }
+.profile-game .badge.draw { color: var(--text-dim); }
+.profile-game button { padding: 3px 9px; font-size: 0.85em; }
+.profile-empty { color: var(--text-dim); padding: 8px 0; }
+.leaderboard-name.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.leaderboard-name.clickable:hover { color: var(--accent); }
+.auth-status.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+
+/* ---------- Replay ---------- */
+.replay-box { max-width: 420px; }
+.replay-sub { margin: -8px 0 10px 0; color: var(--text-dim); font-size: 0.9em; }
+.replay-board {
+  display: grid;
+  grid-template-columns: repeat(8, 40px);
+  grid-template-rows: repeat(8, 40px);
+  border: 3px solid #4a3623; border-radius: 4px; width: max-content; margin: 0 auto;
+}
+.replay-board .square { width: 40px; height: 40px; font-size: 28px; cursor: default; }
+.replay-board .crown-badge { font-size: 11px; top: 0; right: 1px; }
+.replay-move-text { text-align: center; min-height: 1.6em; margin: 10px 0 6px 0; font-weight: 600; }
+.replay-move-text .reveal { color: var(--accent); }
+.replay-controls { display: flex; gap: 6px; justify-content: center; }
+.replay-controls button { min-width: 44px; }
+.replay-legend { font-size: 0.8em; color: var(--text-dim); text-align: center; margin: 10px 0 0 0; }

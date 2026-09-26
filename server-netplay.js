@@ -70,6 +70,14 @@
     return res.json();
   }
 
+  // Public read-only endpoints (replays, profiles) — no auth header needed.
+  async function getJson(path) {
+    const res = await fetch(SERVER_URL + path);
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
+    return { status: res.status, body };
+  }
+
   async function signup({ email, password, displayName }) {
     const result = await apiPost('/api/signup', { email, password, displayName });
     if (result.ok) setAuth(result.token, result.user);
@@ -250,11 +258,12 @@
   function currentColor() { return myColor; }
   function currentOpponentName() { return myOpponentName; }
   function currentTimeControl() { return myTimeControl; }
+  function currentGameId() { return myGameId; }
 
   const ServerNetExports = {
     isConfigured, hostGame, joinGame, submitSetupPick, sendMove,
     onGameStart, onMoveApplied, onMoveRejected, onGameOver, onClockSync,
-    leaveRoom, currentColor, currentOpponentName, currentTimeControl,
+    leaveRoom, currentColor, currentOpponentName, currentTimeControl, currentGameId, getJson,
     onLeaderboardUpdate, watchLeaderboard, unwatchLeaderboard,
     signup, login, logout, currentUser, findMatch, cancelMatch,
     resign, offerDraw, respondDraw, onDrawOffered,

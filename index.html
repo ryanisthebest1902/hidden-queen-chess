@@ -54,6 +54,7 @@
       <h3>Play again?</h3>
       <div class="online-controls">
         <button class="primary" id="rematch-btn">Rematch</button>
+        <button id="watch-replay-btn">Watch replay</button>
       </div>
       <p class="rematch-note" id="rematch-note"></p>
     </div>
@@ -273,6 +274,39 @@
     <div id="leaderboard-list" class="leaderboard-list"></div>
     <div class="modal-actions">
       <button class="primary" id="leaderboard-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Player profile (opened from the leaderboard, the header name, or a replay list) -->
+<div class="modal-overlay hidden" id="profile-modal">
+  <div class="modal-box wide">
+    <h2 id="profile-name">Profile</h2>
+    <p class="profile-since" id="profile-since"></p>
+    <div id="profile-body" class="profile-body"></div>
+    <div class="modal-actions">
+      <button class="primary" id="profile-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Game replay: step through a finished game with both hidden queens revealed -->
+<div class="modal-overlay hidden" id="replay-modal">
+  <div class="modal-box replay-box">
+    <h2 id="replay-title">Replay</h2>
+    <p class="replay-sub" id="replay-sub"></p>
+    <div class="replay-board" id="replay-board"></div>
+    <div class="replay-move-text" id="replay-move-text"></div>
+    <div class="replay-controls">
+      <button id="replay-first-btn" title="Start">⏮</button>
+      <button id="replay-prev-btn" title="Back (←)">◀</button>
+      <button id="replay-play-btn" title="Auto-play">▶ Play</button>
+      <button id="replay-next-btn" title="Forward (→)">▶</button>
+      <button id="replay-last-btn" title="End">⏭</button>
+    </div>
+    <p class="replay-legend">♛ marks each side's hidden queen. It shows as its disguise until it reveals itself.</p>
+    <div class="modal-actions">
+      <button class="primary" id="replay-close-btn">Close</button>
     </div>
   </div>
 </div>

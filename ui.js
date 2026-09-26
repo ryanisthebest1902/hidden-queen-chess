@@ -329,9 +329,15 @@
   // I can accept | 'unavailable' -> opponent left / room expired.
   let rematchState = 'idle';
   function updateRematchBox() {
-    const show = mode === 'online' && stage === 'over' && rematchState !== 'unavailable';
+    // The box stays up after a game so "Watch replay" is always reachable;
+    // only the rematch button/note go away once a rematch is impossible.
+    const show = mode === 'online' && stage === 'over';
     rematchBox.classList.toggle('hidden', !show);
     if (!show) return;
+    const rematchPossible = rematchState !== 'unavailable';
+    rematchBtn.classList.toggle('hidden', !rematchPossible);
+    rematchNote.classList.toggle('hidden', !rematchPossible);
+    if (!rematchPossible) return;
     rematchBtn.disabled = rematchState === 'sent';
     rematchBtn.textContent = rematchState === 'offered' ? 'Accept rematch' : rematchState === 'sent' ? 'Waiting for opponent…' : 'Rematch';
     rematchNote.textContent = rematchState === 'offered' ? 'Your opponent wants a rematch. Colors swap.'
@@ -618,9 +624,14 @@
     if (user) {
       authStatusEl.textContent = 'Logged in as ' + user.displayName;
       authStatusEl.classList.remove('hidden');
+      authStatusEl.classList.add('clickable');
+      authStatusEl.title = 'View your profile and game history';
+      authStatusEl.onclick = () => openProfile(user.id);
       authBtn.textContent = 'Log Out';
     } else {
       authStatusEl.classList.add('hidden');
+      authStatusEl.classList.remove('clickable');
+      authStatusEl.onclick = null;
       authBtn.textContent = 'Log In';
     }
   }
@@ -728,6 +739,11 @@
       const name = document.createElement('span');
       name.className = 'leaderboard-name';
       name.textContent = entry.displayName; // textContent, not innerHTML — display names are user-chosen at signup
+      if (entry.userId) { // click a name to see that player's profile
+        name.classList.add('clickable');
+        name.title = 'View profile';
+        name.addEventListener('click', () => openProfile(entry.userId));
+      }
       const games = document.createElement('span');
       games.className = 'leaderboard-games';
       games.textContent = entry.gamesPlayed + (entry.gamesPlayed === 1 ? ' game' : ' games');
@@ -745,6 +761,223 @@
     leaderboardTabBtns.forEach((btn) => btn.classList.toggle('active', btn.dataset.timeClass === timeClass));
     leaderboardListEl.innerHTML = '<div class="leaderboard-loading">Loading…</div>';
     Net.watchLeaderboard(timeClass);
+  }
+
+  // ---------- Game replay ----------
+  // A replay rebuilds the game locally from the saved move list. Unlike a live
+  // game, this engine is told BOTH hidden queens up front (the game is over,
+  // so nothing is secret any more), which also means plain engine.makeMove()
+  // reproduces every move exactly — no disguise-replay trick needed.
+  const replayModal = document.getElementById('replay-modal');
+  const replayBoardEl = document.getElementById('replay-board');
+  const replayMoveTextEl = document.getElementById('replay-move-text');
+  const replayPlayBtn = document.getElementById('replay-play-btn');
+  let replayFrames = []; // frames[i] = board after i plies (0 = start)
+  let replayRecs = [];   // replayRecs[i-1] = the move record that produced frames[i]
+  let replayIndex = 0;
+  let replayTimer = null;
+
+  function algebraicToIdx(s) { return sq(parseInt(s[1], 10) - 1, 'abcdefgh'.indexOf(s[0])); }
+
+  function buildReplay(saved) {
+    const e = new Engine();
+    for (const color of [WHITE, BLACK]) {
+      const startSq = saved.hq[color];
+      const piece = startSq && e.board[algebraicToIdx(startSq)];
+      if (piece) e.designateHiddenQueen(color, piece.id);
+    }
+    e.maybeStartGame();
+    const snapshot = () => e.board.map((p) => p && {
+      // A hidden queen keeps looking like its disguise until it has revealed itself.
+      type: p.isHiddenQueen && !p.revealed ? p.disguiseType : p.type,
+      color: p.color, hiddenQueen: !!p.isHiddenQueen,
+    });
+    const frames = [snapshot()];
+    const recs = [];
+    for (const m of saved.moves) {
+      const r = e.makeMove({ from: algebraicToIdx(m.from), to: algebraicToIdx(m.to), promotion: m.promotion || undefined });
+      if (!r.ok) break; // shouldn't happen — same rules the server used — but never loop on a bad record
+      recs.push(r.record);
+      frames.push(snapshot());
+    }
+    return { frames, recs };
+  }
+
+  function renderReplayFrame() {
+    const frame = replayFrames[replayIndex];
+    const rec = replayIndex > 0 ? replayRecs[replayIndex - 1] : null;
+    replayBoardEl.innerHTML = '';
+    for (let r = 7; r >= 0; r--) {
+      for (let f = 0; f < 8; f++) {
+        const s = sq(r, f);
+        const div = document.createElement('div');
+        div.className = 'square ' + ((r + f) % 2 === 0 ? 'dark' : 'light');
+        if (rec && (s === rec.from || s === rec.to)) div.classList.add('last-move');
+        const info = frame[s];
+        if (info) {
+          const glyph = document.createElement('span');
+          glyph.className = 'piece ' + (info.color === WHITE ? 'white' : 'black');
+          glyph.textContent = GLYPHS[info.color][info.type];
+          div.appendChild(glyph);
+          if (info.hiddenQueen) {
+            const crown = document.createElement('span');
+            crown.className = 'crown-badge';
+            crown.textContent = '♛';
+            div.appendChild(crown);
+          }
+        }
+        replayBoardEl.appendChild(div);
+      }
+    }
+    replayMoveTextEl.textContent = '';
+    if (!rec) {
+      replayMoveTextEl.textContent = replayFrames.length > 1 ? 'Start position — press ▶ to step through' : 'No moves were played';
+    } else {
+      const moveNo = Math.ceil(replayIndex / 2);
+      replayMoveTextEl.textContent = `${moveNo}${replayIndex % 2 ? '.' : '...'} ${moveToNotation(rec)}`;
+      if (rec.wasHiddenAndRevealedThisMove || rec.capturedWasHiddenQueen) {
+        const note = document.createElement('span');
+        note.className = 'reveal';
+        note.textContent = rec.wasHiddenAndRevealedThisMove ? '  ♛ hidden queen revealed!' : '  ♛ hidden queen captured!';
+        replayMoveTextEl.appendChild(note);
+      }
+    }
+    document.getElementById('replay-first-btn').disabled = replayIndex === 0;
+    document.getElementById('replay-prev-btn').disabled = replayIndex === 0;
+    document.getElementById('replay-next-btn').disabled = replayIndex === replayFrames.length - 1;
+    document.getElementById('replay-last-btn').disabled = replayIndex === replayFrames.length - 1;
+  }
+
+  function replayStop() {
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+    replayPlayBtn.textContent = '▶ Play';
+  }
+  function replayGo(i) {
+    replayIndex = Math.max(0, Math.min(replayFrames.length - 1, i));
+    renderReplayFrame();
+    if (replayIndex === replayFrames.length - 1) replayStop();
+  }
+  document.getElementById('replay-first-btn').addEventListener('click', () => { replayStop(); replayGo(0); });
+  document.getElementById('replay-prev-btn').addEventListener('click', () => { replayStop(); replayGo(replayIndex - 1); });
+  document.getElementById('replay-next-btn').addEventListener('click', () => { replayStop(); replayGo(replayIndex + 1); });
+  document.getElementById('replay-last-btn').addEventListener('click', () => { replayStop(); replayGo(replayFrames.length - 1); });
+  replayPlayBtn.addEventListener('click', () => {
+    if (replayTimer) { replayStop(); return; }
+    if (replayIndex >= replayFrames.length - 1) replayGo(0);
+    replayPlayBtn.textContent = '⏸ Pause';
+    replayTimer = setInterval(() => replayGo(replayIndex + 1), 900);
+  });
+  document.getElementById('replay-close-btn').addEventListener('click', () => { replayStop(); replayModal.classList.add('hidden'); });
+  document.addEventListener('keydown', (ev) => {
+    if (replayModal.classList.contains('hidden')) return;
+    if (ev.key === 'ArrowLeft') { replayStop(); replayGo(replayIndex - 1); }
+    else if (ev.key === 'ArrowRight') { replayStop(); replayGo(replayIndex + 1); }
+    else if (ev.key === 'Escape') { replayStop(); replayModal.classList.add('hidden'); }
+  });
+
+  // retries: a game that just ended is saved asynchronously by the server, so
+  // "Watch replay" pressed the instant it ends may need a moment.
+  async function openReplay(gameId, retries = 3) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      let res;
+      try { res = await Net.getJson('/api/games/' + encodeURIComponent(gameId)); } catch (e) { res = null; }
+      if (res && res.status === 200 && res.body && res.body.ok) {
+        const game = res.body.game;
+        const built = buildReplay(game.moves);
+        replayFrames = built.frames; replayRecs = built.recs;
+        const resultText = game.result === 'white' ? 'White won' : game.result === 'black' ? 'Black won' : 'Draw';
+        document.getElementById('replay-title').textContent = `${game.white_name || 'White'} vs ${game.black_name || 'Black'}`; // textContent — names are user-chosen
+        document.getElementById('replay-sub').textContent = `${resultText} (${(game.end_reason || '').replace(/_/g, ' ')}) · ${game.time_control}`;
+        replayStop();
+        replayModal.classList.remove('hidden');
+        replayGo(0);
+        return;
+      }
+      if (res && res.status === 404 && res.body && res.body.reason === 'no_replay') {
+        showToast('This game was played before replays existed, so it has no saved moves.');
+        return;
+      }
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 1200));
+    }
+    showToast("Couldn't load that replay yet — try again in a moment.");
+  }
+
+  document.getElementById('watch-replay-btn').addEventListener('click', () => {
+    const id = Net.currentGameId();
+    if (id) openReplay(id);
+  });
+
+  // ---------- Player profiles ----------
+  const profileModal = document.getElementById('profile-modal');
+  const profileBody = document.getElementById('profile-body');
+  document.getElementById('profile-close-btn').addEventListener('click', () => profileModal.classList.add('hidden'));
+
+  async function openProfile(userId) {
+    let res;
+    try { res = await Net.getJson('/api/profile/' + encodeURIComponent(userId)); } catch (e) { res = null; }
+    if (!res || res.status !== 200 || !res.body || !res.body.ok) {
+      showToast("Couldn't load that profile.");
+      return;
+    }
+    const p = res.body.profile;
+    document.getElementById('profile-name').textContent = p.displayName; // textContent, never innerHTML
+    document.getElementById('profile-since').textContent = 'Member since ' + new Date(p.memberSince).toLocaleDateString();
+    profileBody.innerHTML = '';
+
+    const ratings = document.createElement('div');
+    ratings.className = 'profile-ratings';
+    for (const r of p.ratings) {
+      const chip = document.createElement('div');
+      chip.className = 'profile-chip';
+      const label = document.createElement('span'); label.className = 'label'; label.textContent = r.timeClass;
+      const value = document.createElement('span'); value.className = 'value'; value.textContent = r.gamesPlayed ? String(r.rating) : '—';
+      const sub = document.createElement('span'); sub.className = 'sub';
+      sub.textContent = r.gamesPlayed ? `${r.gamesPlayed} rated ${r.gamesPlayed === 1 ? 'game' : 'games'}${r.provisional ? ' · provisional' : ''}` : 'no rated games';
+      chip.append(label, value, sub);
+      ratings.appendChild(chip);
+    }
+    profileBody.appendChild(ratings);
+
+    const record = document.createElement('p');
+    record.className = 'profile-record';
+    record.textContent = `Record: ${p.record.wins} won · ${p.record.draws} drawn · ${p.record.losses} lost`;
+    profileBody.appendChild(record);
+
+    const title = document.createElement('div');
+    title.className = 'profile-section-title';
+    title.textContent = 'Recent games';
+    profileBody.appendChild(title);
+
+    if (!p.recentGames.length) {
+      const empty = document.createElement('div');
+      empty.className = 'profile-empty';
+      empty.textContent = 'No online games yet.';
+      profileBody.appendChild(empty);
+    }
+    for (const g of p.recentGames) {
+      const iWasWhite = g.white_user_id === p.userId;
+      const outcome = g.result === 'draw' ? 'draw' : ((g.result === 'white') === iWasWhite ? 'win' : 'loss');
+      const row = document.createElement('div');
+      row.className = 'profile-game';
+      const badge = document.createElement('span');
+      badge.className = 'badge ' + outcome;
+      badge.textContent = outcome === 'win' ? 'Win' : outcome === 'loss' ? 'Loss' : 'Draw';
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = 'vs ' + ((iWasWhite ? g.black_name : g.white_name) || 'Opponent');
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = `${g.time_control} · ${g.rated ? 'rated' : 'casual'} · ${new Date(g.ended_at).toLocaleDateString()}`;
+      row.append(badge, who, meta);
+      if (g.has_replay) {
+        const btn = document.createElement('button');
+        btn.textContent = 'Replay';
+        btn.addEventListener('click', () => openReplay(g.id));
+        row.appendChild(btn);
+      }
+      profileBody.appendChild(row);
+    }
+    profileModal.classList.remove('hidden');
   }
 
   const soundBtn = document.getElementById('sound-btn');

@@ -46,7 +46,7 @@ async function main() {
     const black = aMatch.yourColor === 'b' ? alice : bob;
 
     white.emit('submitHiddenQueen', { gameId, square: 'a1' });
-    black.emit('submitHiddenQueen', { gameId, square: 'b8' });
+    black.emit('submitHiddenQueen', { gameId, square: 'a8' }); // a rook, so the knight on b8 stays a normal knight
     await Promise.all([waitForEvent(white, 'gameStart'), waitForEvent(black, 'gameStart')]);
 
     const script = [[white, 'e2', 'e4'], [black, 'e7', 'e5'], [white, 'g1', 'f3'], [black, 'b8', 'c6']];
@@ -70,7 +70,7 @@ async function main() {
       const g = replay.game;
       assert(g.result === 'black' && g.end_reason === 'resignation', `result recorded (${g.result}/${g.end_reason})`);
       assert(g.time_control === '5+0', 'time control recorded');
-      assert(g.moves && g.moves.hq && g.moves.hq.w === 'a1' && g.moves.hq.b === 'b8', `hidden queen starting squares saved (${JSON.stringify(g.moves && g.moves.hq)})`);
+      assert(g.moves && g.moves.hq && g.moves.hq.w === 'a1' && g.moves.hq.b === 'a8', `hidden queen starting squares saved (${JSON.stringify(g.moves && g.moves.hq)})`);
       const list = (g.moves.moves || []).map((m) => m.from + m.to).join(' ');
       assert(list === 'e2e4 e7e5 g1f3 b8c6', `move list saved exactly (${list})`);
     }
