@@ -124,7 +124,8 @@ app.get('/api/me/games', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, white_name, black_name, time_control, result, end_reason, started_at, ended_at,
-              rated, white_rating_before, white_rating_after, black_rating_before, black_rating_after
+              rated, white_rating_before, white_rating_after, black_rating_before, black_rating_after,
+              (moves IS NOT NULL) AS has_replay
        FROM games WHERE white_user_id = $1 OR black_user_id = $1
        ORDER BY ended_at DESC LIMIT 50`,
       [user.id]
@@ -146,6 +147,70 @@ app.get('/api/me/ratings', async (req, res) => {
     res.json({ ok: true, ratings });
   } catch (err) {
     console.error('ratings query error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A finished game, for the replay viewer. Public by design: the game id is an
+// unguessable UUID, and once a game is over there's nothing left to keep
+// secret (both hidden queens are revealed to everyone at the end anyway).
+app.get('/api/games/:id', async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ ok: false, reason: 'bad_id' });
+  if (!pool) return res.status(503).json({ ok: false, reason: 'server_not_configured' });
+  try {
+    const result = await pool.query(
+      `SELECT id, white_name, black_name, time_control, result, end_reason, ended_at, rated, moves
+       FROM games WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ ok: false, reason: 'not_found' });
+    const row = result.rows[0];
+    if (!row.moves) return res.status(404).json({ ok: false, reason: 'no_replay' });
+    res.json({ ok: true, game: row });
+  } catch (err) {
+    console.error('replay query error', err);
+    res.status(500).json({ ok: false, reason: 'server_error' });
+  }
+});
+
+// Public player profile: display name, ratings, overall record, recent games.
+// Never returns the email or anything from the users row besides name + join date.
+app.get('/api/profile/:userId', async (req, res) => {
+  if (!UUID_RE.test(req.params.userId)) return res.status(400).json({ ok: false, reason: 'bad_id' });
+  if (!pool) return res.status(503).json({ ok: false, reason: 'server_not_configured' });
+  const userId = req.params.userId;
+  try {
+    const userRes = await pool.query('SELECT display_name, created_at FROM users WHERE id = $1', [userId]);
+    if (!userRes.rows.length) return res.status(404).json({ ok: false, reason: 'not_found' });
+    const [ratings, record, recent] = await Promise.all([
+      getRatingsForUser(userId),
+      pool.query(
+        `SELECT
+           count(*) FILTER (WHERE (white_user_id = $1 AND result = 'white') OR (black_user_id = $1 AND result = 'black'))::int AS wins,
+           count(*) FILTER (WHERE result = 'draw')::int AS draws,
+           count(*) FILTER (WHERE (white_user_id = $1 AND result = 'black') OR (black_user_id = $1 AND result = 'white'))::int AS losses
+         FROM games WHERE white_user_id = $1 OR black_user_id = $1`,
+        [userId]
+      ),
+      pool.query(
+        `SELECT id, white_name, black_name, white_user_id, time_control, result, end_reason, ended_at, rated,
+                (moves IS NOT NULL) AS has_replay
+         FROM games WHERE white_user_id = $1 OR black_user_id = $1
+         ORDER BY ended_at DESC LIMIT 10`,
+        [userId]
+      ),
+    ]);
+    res.json({
+      ok: true,
+      profile: {
+        userId, displayName: userRes.rows[0].display_name, memberSince: userRes.rows[0].created_at,
+        ratings, record: record.rows[0], recentGames: recent.rows,
+      },
+    });
+  } catch (err) {
+    console.error('profile query error', err);
     res.status(500).json({ ok: false, reason: 'server_error' });
   }
 });
@@ -302,6 +367,22 @@ async function endGame(gameId, result, reason) {
   setTimeout(() => { deleteRoom(gameId).catch(() => {}); }, REMATCH_WINDOW_MS);
 }
 
+// Everything needed to replay a finished game move by move: the two hidden
+// queens' STARTING squares plus the move list. Piece ids in a fresh Engine are
+// deterministic, so a queen's id maps back to its starting square.
+function buildReplayData(room) {
+  const engine = deserializeEngine(room.engineData);
+  const fresh = new Engine();
+  const hq = {};
+  for (const c of ['w', 'b']) {
+    const id = engine.hiddenQueenId[c];
+    const idx = fresh.board.findIndex((p) => p && p.id === id);
+    hq[c] = idx >= 0 ? algebraic(idx) : null;
+  }
+  const moves = engine.history.map((r) => ({ from: algebraic(r.from), to: algebraic(r.to), promotion: r.promotion || null }));
+  return { v: 1, hq, moves };
+}
+
 async function persistCompletedGame(room, result, reason) {
   if (!pool) return; // DATABASE_URL not configured — skip silently, already warned at startup
   try {
@@ -315,16 +396,24 @@ async function persistCompletedGame(room, result, reason) {
         whiteUserId: room.userIds.w, blackUserId: room.userIds.b, timeControl: room.timeControl, result,
       });
     }
+    // The replay is a nice-to-have: if building it ever fails, still save the
+    // game itself (result/history/ratings) rather than losing all of it.
+    let replayJson = null;
+    try { replayJson = JSON.stringify(buildReplayData(room)); } catch (e) { console.error('replay data failed', e); }
+    // id = the room's own id, so a client that just finished this game
+    // already knows the id to ask /api/games/:id for its replay.
     await pool.query(
       `INSERT INTO games (
-         white_user_id, black_user_id, white_name, black_name, time_control, result, end_reason, started_at,
-         rated, time_class, white_rating_before, white_rating_after, black_rating_before, black_rating_after
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         id, white_user_id, black_user_id, white_name, black_name, time_control, result, end_reason, started_at,
+         rated, time_class, white_rating_before, white_rating_after, black_rating_before, black_rating_after, moves
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ON CONFLICT (id) DO NOTHING`,
       [
-        room.userIds.w, room.userIds.b, room.names.w, room.names.b, room.timeControl, result, reason, room.startedAt,
+        room.id, room.userIds.w, room.userIds.b, room.names.w, room.names.b, room.timeControl, result, reason, room.startedAt,
         !!ratingResult, ratingResult ? ratingResult.timeClass : null,
         ratingResult ? ratingResult.white.before : null, ratingResult ? ratingResult.white.after : null,
         ratingResult ? ratingResult.black.before : null, ratingResult ? ratingResult.black.after : null,
+        replayJson,
       ]
     );
     if (ratingResult) {

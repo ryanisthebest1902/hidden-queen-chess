@@ -117,14 +117,15 @@ async function getRatingsForUser(userId) {
 async function getLeaderboard(timeClass, limit) {
   if (!pool) return [];
   const result = await pool.query(
-    `SELECT u.display_name, r.rating, r.games_played
+    `SELECT u.id AS user_id, u.display_name, r.rating, r.games_played
      FROM ratings r JOIN users u ON u.id = r.user_id
      WHERE r.time_class = $1 AND r.games_played >= 1
      ORDER BY r.rating DESC
      LIMIT $2`,
     [timeClass, limit]
   );
-  return result.rows.map((r) => ({ displayName: r.display_name, rating: Math.round(r.rating), gamesPlayed: r.games_played }));
+  // userId lets the client link a leaderboard row to that player's profile.
+  return result.rows.map((r) => ({ userId: r.user_id, displayName: r.display_name, rating: Math.round(r.rating), gamesPlayed: r.games_played }));
 }
 
 module.exports = { timeClassOf, applyGameResult, getRatingsForUser, getLeaderboard, PROVISIONAL_GAMES };

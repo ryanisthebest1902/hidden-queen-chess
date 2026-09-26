@@ -53,6 +53,9 @@ async function initSchema() {
       ADD COLUMN IF NOT EXISTS black_rating_before real,
       ADD COLUMN IF NOT EXISTS black_rating_after real;
   `);
+  // Added for game replay: { v, hq: {w:'a1', b:'b8'}, moves: [{from,to,promotion}] }.
+  // Null for games played before replays existed.
+  await pool.query(`ALTER TABLE games ADD COLUMN IF NOT EXISTS moves jsonb;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ratings (
       user_id uuid NOT NULL REFERENCES users(id),
