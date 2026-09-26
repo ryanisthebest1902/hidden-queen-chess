@@ -457,3 +457,5 @@ button.mode-choice-btn.primary .mode-choice-sub { color: #1b1b1f; opacity: 0.75;
 .leaderboard-games { color: var(--text-dim); font-size: 0.85em; }
 .leaderboard-rating { color: var(--accent); font-weight: 700; font-family: 'Consolas', monospace; }
 .leaderboard-empty, .leaderboard-loading { color: var(--text-dim); text-align: center; padding: 20px; }
+
+.rematch-note { margin: 8px 0 0 0; font-size: 0.85em; color: var(--text-dim); }

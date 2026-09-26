@@ -214,6 +214,34 @@
   function watchLeaderboard(timeClass) { onceConnected((s) => s.emit('watchLeaderboard', { timeClass })); }
   function unwatchLeaderboard(timeClass) { if (socket) socket.emit('unwatchLeaderboard', { timeClass }); }
 
+  // ---- Rematch ----
+  // The server announces a rematch with 'rematchStarted' (same payload as
+  // matchFound) so it never collides with the original hosting/joining flow's
+  // matchFound listener. Each registration replaces the last (off before on),
+  // so calling these again for a later game can't stack duplicates.
+  function requestRematch() { connectSocket().emit('requestRematch', { gameId: myGameId }); }
+  function onRematchOffered(cb) { const s = connectSocket(); s.off('rematchOffered'); s.on('rematchOffered', () => cb()); }
+  function onRematchUnavailable(cb) { const s = connectSocket(); s.off('rematchUnavailable'); s.on('rematchUnavailable', (p) => cb(p && p.reason)); }
+  function onRematchStarted(cb) {
+    const s = connectSocket();
+    s.off('rematchStarted');
+    s.on('rematchStarted', (payload) => {
+      myColor = payload.yourColor;
+      myGameId = payload.gameId;
+      myResumeToken = payload.resumeToken;
+      myOpponentName = payload.opponentName;
+      myTimeControl = payload.timeControl || null;
+      cb();
+    });
+  }
+  // Drops the per-game listeners (NOT the match/leaderboard ones) so starting
+  // another game on the same socket — a rematch — doesn't double-apply every
+  // move: each beginOnlineGame() re-registers all of these.
+  function resetGameListeners() {
+    if (!socket) return;
+    for (const ev of ['gameStart', 'moveApplied', 'moveRejected', 'gameOver', 'clockSync', 'drawOffered', 'revealEvent']) socket.off(ev);
+  }
+
   function leaveRoom() {
     if (socket) { socket.removeAllListeners(); socket.disconnect(); socket = null; }
     myColor = null; myGameId = null; myResumeToken = null; myOpponentName = null; myTimeControl = null;
@@ -230,6 +258,7 @@
     onLeaderboardUpdate, watchLeaderboard, unwatchLeaderboard,
     signup, login, logout, currentUser, findMatch, cancelMatch,
     resign, offerDraw, respondDraw, onDrawOffered,
+    requestRematch, onRematchOffered, onRematchUnavailable, onRematchStarted, resetGameListeners,
     applyRemoteMove, // re-exported so ui.js doesn't need a second global reference
   };
   root.HiddenQueenNet = ServerNetExports;

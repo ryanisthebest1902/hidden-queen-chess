@@ -95,6 +95,9 @@
   const leaderboardTabBtns = [...document.querySelectorAll('.leaderboard-tab-btn')];
 
   const onlineControlsBox = document.getElementById('online-controls-box');
+  const rematchBox = document.getElementById('rematch-box');
+  const rematchBtn = document.getElementById('rematch-btn');
+  const rematchNote = document.getElementById('rematch-note');
   const resignBtn = document.getElementById('resign-btn');
   const offerDrawBtn = document.getElementById('offer-draw-btn');
   const resignConfirmModal = document.getElementById('resign-confirm-modal');
@@ -163,7 +166,7 @@
   // starts suspended and is resumed inside a user gesture; every call is
   // wrapped so a browser without audio can never break a move.
   const SOUND_FILES = {
-    move: 'sounds/Move.mp3', check: 'sounds/Check.mp3',
+    move: 'sounds/Move.mp3', check: 'sounds/Check.mp3', lowtime: 'sounds/LowTime.mp3',
     win: 'sounds/Victory.mp3', loss: 'sounds/Defeat.mp3', draw: 'sounds/Draw.mp3',
   };
   const soundBuffers = {};
@@ -281,6 +284,13 @@
       }
     } catch (e) { /* audio must never break a move */ }
   }
+  function playLowTimeSound() {
+    const ctx = getAudio();
+    if (!ctx) return;
+    try {
+      if (!playSample(ctx, 'lowtime', { vol: 0.7 })) tone(ctx, { freq: 880, dur: 0.25, vol: 0.06 });
+    } catch (e) { /* ignore */ }
+  }
   function playGameOverSound(outcome) { // 'win' | 'loss' | 'draw'
     const ctx = getAudio();
     if (!ctx) return;
@@ -314,6 +324,26 @@
   let onlineClocks = null;
   let clockTicker = null;
 
+  // ---- rematch ----
+  // 'idle' -> I can ask | 'sent' -> waiting on them | 'offered' -> they asked,
+  // I can accept | 'unavailable' -> opponent left / room expired.
+  let rematchState = 'idle';
+  function updateRematchBox() {
+    const show = mode === 'online' && stage === 'over' && rematchState !== 'unavailable';
+    rematchBox.classList.toggle('hidden', !show);
+    if (!show) return;
+    rematchBtn.disabled = rematchState === 'sent';
+    rematchBtn.textContent = rematchState === 'offered' ? 'Accept rematch' : rematchState === 'sent' ? 'Waiting for opponent…' : 'Rematch';
+    rematchNote.textContent = rematchState === 'offered' ? 'Your opponent wants a rematch. Colors swap.'
+      : rematchState === 'sent' ? 'Rematch offered — the game starts when they accept.' : 'Same time control, colors swapped. Unrated.';
+  }
+  rematchBtn.addEventListener('click', () => {
+    if (rematchState !== 'idle' && rematchState !== 'offered') return;
+    if (rematchState === 'idle') rematchState = 'sent'; // if it was 'offered', accepting starts the game straight away
+    updateRematchBox();
+    Net.requestRematch();
+  });
+
   function parseTimeControlMs(tc) {
     const m = /^(\d+)\+(\d+)$/.exec(String(tc || ''));
     return m ? parseInt(m[1], 10) * 60000 : null;
@@ -338,6 +368,7 @@
     const total = Math.ceil(ms / 1000);
     return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
   }
+  let lowTimeWarned = false; // true once the warning has played for the current "under 10s" stretch
   function updateClockDisplay() {
     if (mode !== 'online') return;
     for (const color of ['w', 'b']) {
@@ -347,6 +378,15 @@
       el.textContent = formatClock(ms);
       el.classList.toggle('low', ms > 0 && ms < 30000);
       el.classList.toggle('expired', ms <= 0);
+    }
+    // One warning sound when MY clock, while it's running, drops under 10s.
+    const me = Net.currentColor();
+    const myMs = clockMsFor(me);
+    const myClockRunning = stage === 'playing' && !onlineServerConfirmedOver && engine && engine.turn === me;
+    if (myClockRunning && myMs != null && myMs > 0 && myMs < 10000) {
+      if (!lowTimeWarned) { lowTimeWarned = true; playLowTimeSound(); }
+    } else if (myMs == null || myMs >= 10000) {
+      lowTimeWarned = false;
     }
   }
   function startClockTicker() {
@@ -368,6 +408,12 @@
   }
 
   function renderNameplates() {
+    // The middle label is "vs" everywhere except online, where it shows the
+    // game's time control (e.g. "5+3" = 5 minutes plus 3 seconds per move).
+    const vsEl = document.querySelector('.nameplate-vs');
+    const tc = mode === 'online' ? Net.currentTimeControl() : null;
+    vsEl.textContent = tc || 'vs';
+    vsEl.title = tc ? `Time control: ${tc.split('+')[0]} min + ${tc.split('+')[1]} sec per move` : '';
     if (mode === 'hotseat') {
       nameplateHuman.innerHTML = `<span class="name">White</span>`;
       nameplateHuman.classList.toggle('active-turn', engine && !engine.gameOver && engine.turn === WHITE);
@@ -734,6 +780,10 @@
   });
 
   function beginOnlineGame() {
+    // A rematch calls this again on the SAME socket, so drop the previous
+    // game's listeners first or every move would be applied twice.
+    Net.resetGameListeners();
+    rematchState = 'idle';
     gameId++;
     mode = 'online';
     engine = new Engine();
@@ -862,6 +912,23 @@
     });
     Net.onDrawOffered(() => {
       if (mode === 'online' && stage === 'playing') drawOfferModal.classList.remove('hidden');
+    });
+    Net.onRematchOffered(() => {
+      if (mode !== 'online' || stage !== 'over') return;
+      rematchState = 'offered';
+      updateRematchBox();
+      showToast('Your opponent wants a rematch.');
+    });
+    Net.onRematchUnavailable((reason) => {
+      if (mode !== 'online' || stage !== 'over') return;
+      rematchState = 'unavailable';
+      updateRematchBox();
+      showToast(reason === 'opponent_left' ? 'Your opponent left, so there is no rematch.' : 'That rematch is no longer available.');
+    });
+    Net.onRematchStarted(() => {
+      resignConfirmModal.classList.add('hidden');
+      drawOfferModal.classList.add('hidden');
+      beginOnlineGame();
     });
 
     if (introModal.classList.contains('hidden')) {
@@ -1141,6 +1208,7 @@
     renderNameplates();
     renderPremoves();
     onlineControlsBox.classList.toggle('hidden', !(mode === 'online' && stage === 'playing'));
+    updateRematchBox();
   }
 
   function pieceInCheckSquare() {

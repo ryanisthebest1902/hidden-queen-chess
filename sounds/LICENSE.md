@@ -1,6 +1,6 @@
 # Sound effects — credits and license
 
-The files in this folder (`Move.mp3`, `Check.mp3`, `Victory.mp3`,
+The files in this folder (`Move.mp3`, `Check.mp3`, `LowTime.mp3`, `Victory.mp3`,
 `Defeat.mp3`, `Draw.mp3`) are copied unmodified from the **"sfx" sound set** of
 [Lichess](https://lichess.org) (`lichess-org/lila`, `public/sound/sfx/`).
 
