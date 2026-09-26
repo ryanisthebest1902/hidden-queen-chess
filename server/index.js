@@ -49,6 +49,7 @@ const PORT = process.env.PORT || 8080;
 const LEADERBOARD_PUSH_SIZE = 10; // "Top 10 scores, updating for everyone"
 const leaderboardRoom = (timeClass) => 'leaderboard:' + timeClass;
 const SETUP_TIMEOUT_MS = 30000;
+const REMATCH_WINDOW_MS = 5 * 60 * 1000; // how long a finished game's room is kept so a rematch can still be offered
 const LAG_GRACE_MS = 1500; // small, symmetric clock grace for message transit time (spec section 2/10)
 const HOUSEKEEPING_INTERVAL_MS = 1000; // drives clock-sync broadcasts + setup-timeout + disconnect-grace checks
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // unaccepted challenges expire after 10 min
@@ -295,9 +296,10 @@ async function endGame(gameId, result, reason) {
   await clearBusy(room.sockets.w).catch(() => {});
   await clearBusy(room.sockets.b).catch(() => {});
   persistCompletedGame(room, result, reason); // best-effort — never blocks the live game flow
-  // No rematch yet — free the room shortly after (both the Redis copy and
-  // this instance's local housekeeping interval for it).
-  setTimeout(() => { deleteRoom(gameId).catch(() => {}); }, 60000);
+  // Keep the finished room around for a while so a rematch can be offered and
+  // accepted (see 'requestRematch'), then free it (the Redis copy; this
+  // instance's housekeeping interval already stops itself once phase is 'over').
+  setTimeout(() => { deleteRoom(gameId).catch(() => {}); }, REMATCH_WINDOW_MS);
 }
 
 async function persistCompletedGame(room, result, reason) {
@@ -411,10 +413,15 @@ function tagLocalSocketIfPresent(socketId, gameId, color) {
   }
 }
 
-async function createGameRoom(aSocketId, aName, aUserId, bSocketId, bName, bUserId, timeControl, rated = false, aRating = null, bRating = null) {
+// opts.aIsWhite forces who gets White (default: a coin flip); opts.rematch
+// announces the new game with 'rematchStarted' instead of 'matchFound', so a
+// client that's already in (or just finished) a game can tell a rematch apart
+// from a fresh pairing without re-running its whole match-setup flow.
+async function createGameRoom(aSocketId, aName, aUserId, bSocketId, bName, bUserId, timeControl, rated = false, aRating = null, bRating = null, opts = {}) {
   const gameId = crypto.randomUUID();
   const engine = new Engine();
-  const aIsWhite = Math.random() < 0.5;
+  const aIsWhite = opts.aIsWhite != null ? opts.aIsWhite : Math.random() < 0.5;
+  const matchEvent = opts.rematch ? 'rematchStarted' : 'matchFound';
   const whiteSocketId = aIsWhite ? aSocketId : bSocketId;
   const blackSocketId = aIsWhite ? bSocketId : aSocketId;
   const whiteName = aIsWhite ? aName : bName;
@@ -455,8 +462,8 @@ async function createGameRoom(aSocketId, aName, aUserId, bSocketId, bName, bUser
   tagLocalSocketIfPresent(whiteSocketId, gameId, 'w');
   tagLocalSocketIfPresent(blackSocketId, gameId, 'b');
 
-  io.to(whiteSocketId).emit('matchFound', { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl, resumeToken: resumeTokens.w });
-  io.to(blackSocketId).emit('matchFound', { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl, resumeToken: resumeTokens.b });
+  io.to(whiteSocketId).emit(matchEvent, { gameId, yourColor: 'w', opponentName: blackName, opponentRating: blackRating, rated, timeControl, resumeToken: resumeTokens.w });
+  io.to(blackSocketId).emit(matchEvent, { gameId, yourColor: 'b', opponentName: whiteName, opponentRating: whiteRating, rated, timeControl, resumeToken: resumeTokens.b });
 
   return room;
 }
@@ -768,6 +775,41 @@ io.on('connection', (socket) => {
     if (outcome && outcome.saved && accept) await endGame(gameId, 'draw', 'draw_agreement');
   });
 
+  // Rematch: whoever asks first makes an offer; when the OTHER player also
+  // asks (their "Accept"), a fresh game starts with the colors swapped and the
+  // same time control. Always casual (unrated) — a rated rematch would let two
+  // friends trade wins to farm ratings. The old room lingers for
+  // REMATCH_WINDOW_MS after the game (see endGame) so there's time to decide.
+  socket.on('requestRematch', async ({ gameId }) => {
+    const outcome = await updateRoom(gameId, (room) => {
+      if (room.phase !== 'over') return { [NO_CHANGE]: true, fail: 'not_over' };
+      const color = colorForSocket(room, socket.id);
+      if (!color) return { [NO_CHANGE]: true, fail: 'not_in_game' };
+      if (room.rematchStarted) return { [NO_CHANGE]: true, fail: 'already_started' };
+      if (room.rematchOfferBy && room.rematchOfferBy !== color) {
+        room.rematchStarted = true;
+        return { [NO_CHANGE]: false, action: 'start' };
+      }
+      room.rematchOfferBy = color;
+      return { [NO_CHANGE]: false, action: 'offer', color };
+    }).catch(() => null);
+    if (!outcome || outcome.result.fail) {
+      socket.emit('rematchUnavailable', { reason: outcome ? outcome.result.fail : 'expired' });
+      return;
+    }
+    const room = outcome.room;
+    if (outcome.result.action === 'offer') {
+      io.to(room.sockets[otherColor(outcome.result.color)]).emit('rematchOffered');
+      return;
+    }
+    // Both want it — previous Black becomes the new White (A is White here).
+    await createGameRoom(
+      room.sockets.b, room.names.b, room.userIds.b,
+      room.sockets.w, room.names.w, room.userIds.w,
+      room.timeControl, false, null, null, { aIsWhite: true, rematch: true },
+    );
+  });
+
   socket.on('ping', ({ clientTime }) => {
     socket.emit('pong', { clientTime, serverTime: Date.now() });
   });
@@ -814,13 +856,17 @@ io.on('connection', (socket) => {
     const color = socket.data.color;
     if (!gameId || !color) return; // never played a room-scoped message on this instance — see cluster.js's note on this edge case
     const outcome = await updateRoom(gameId, (room) => {
-      if (room.phase === 'over') return { [NO_CHANGE]: true };
+      // Game already over: nothing to forfeit, but if the other player is
+      // waiting on a rematch, tell them it isn't coming.
+      if (room.phase === 'over') return { [NO_CHANGE]: true, wasOver: true, otherSocket: room.sockets[otherColor(color)], rematchStarted: !!room.rematchStarted };
       if (room.sockets[color] !== socket.id) return { [NO_CHANGE]: true }; // stale — this socket isn't the current holder of that color anymore (already resumed elsewhere)
       room.disconnectDeadline[color] = Date.now() + DISCONNECT_GRACE_MS;
       return { [NO_CHANGE]: false };
     }).catch(() => null);
     if (outcome && outcome.saved) {
       io.to(outcome.room.sockets[otherColor(color)]).emit('opponentDisconnected', { graceMs: DISCONNECT_GRACE_MS });
+    } else if (outcome && outcome.result.wasOver && !outcome.result.rematchStarted) {
+      io.to(outcome.result.otherSocket).emit('rematchUnavailable', { reason: 'opponent_left' });
     }
   });
 });
